@@ -15,35 +15,42 @@ export class AKFStatusBar {
     
     this.statusEl = this.statusBarItem.createEl("span", {
       cls: "akf-status-bar-item",
-      text: "🔴 AKF",
+      text: "🤖 AKF",
     });
 
     this.statusEl.addEventListener("click", () => {
-      if (this.plugin.akfRunning) {
-        this.plugin.stopAKF();
+      if (this.plugin.isServerRunning) {
+        this.plugin.stopServer();
       } else {
-        this.plugin.startAKF();
+        this.plugin.initializeServer();
       }
     });
 
     this.statusEl.style.cursor = "pointer";
-    this.statusEl.title = "Click to toggle AKF server";
+    this.statusEl.title = "AI Knowledge Filler - Click for options";
 
     this.updateDisplay();
   }
 
   setRunning(running: boolean) {
     if (this.statusEl) {
-      this.statusEl.textContent = running ? "🟢 AKF" : "🔴 AKF";
+      this.statusEl.textContent = running ? "✅ AKF" : "🔴 AKF";
       this.statusEl.title = running 
         ? "AKF Server Running - Click to stop"
         : "AKF Server Stopped - Click to start";
     }
   }
 
+  setStatus(status: string) {
+    if (this.statusEl) {
+      this.statusEl.textContent = status;
+      this.statusEl.title = status;
+    }
+  }
+
   private updateDisplay() {
     if (this.statusEl) {
-      this.setRunning(this.plugin.akfRunning);
+      this.setRunning(this.plugin.isServerRunning);
     }
   }
 

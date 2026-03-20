@@ -1,10 +1,9 @@
-import { App, Modal, Setting } from "obsidian";
+import { App, Modal } from "obsidian";
 import ObsidianAKFPlugin from "./main";
 
 export class ValidateModal extends Modal {
   plugin: ObsidianAKFPlugin;
   path: string;
-  isValidating: boolean = false;
 
   constructor(app: App, plugin: ObsidianAKFPlugin, path: string) {
     super(app);
@@ -15,7 +14,7 @@ export class ValidateModal extends Modal {
   onOpen() {
     const { contentEl } = this;
     contentEl.empty();
-    contentEl.createEl("h2", { text: "AKF Validation Results" });
+    contentEl.createEl("h2", { text: "✅ Validate File" });
 
     const fileName = this.path.split("/").pop() || this.path;
     contentEl.createEl("p", {
@@ -24,35 +23,28 @@ export class ValidateModal extends Modal {
     });
 
     const statusEl = contentEl.createDiv({
-      cls: "akf-validation-status",
       attr: { style: "margin: 20px 0; font-weight: bold;" },
     });
 
     const resultsEl = contentEl.createDiv({
-      cls: "akf-validation-results",
-      attr: { style: "max-height: 300px; overflow-y: auto;" },
+      attr: { style: "max-height: 400px; overflow-y: auto;" },
     });
 
-    statusEl.setText("Starting validation...");
+    statusEl.setText("⏳ Validating...");
 
     this.runValidation(statusEl, resultsEl);
   }
 
   async runValidation(statusEl: HTMLElement, resultsEl: HTMLElement) {
-    this.isValidating = true;
-
     try {
-      await this.plugin.startAKF();
-      statusEl.setText("Validating...");
-
-      const result = await this.plugin.subprocessManager.validate(this.path);
+      const result = await this.plugin.httpClient.validate(this.path);
 
       if (result.is_valid) {
         statusEl.setText("✅ File is valid!");
         statusEl.style.color = "var(--color-green)";
         resultsEl.createEl("p", {
-          text: "No validation errors found.",
-          attr: { style: "color: var(--text-muted);" },
+          text: "No validation errors found. Your file follows the AKF schema perfectly!",
+          attr: { style: "color: var(--color-green);" },
         });
       } else {
         statusEl.setText(`❌ Found ${result.errors.length} error(s)`);
@@ -60,20 +52,30 @@ export class ValidateModal extends Modal {
 
         for (const error of result.errors) {
           const errorItem = resultsEl.createDiv({
-            cls: "akf-validation-error",
             attr: {
               style:
-                "padding: 10px; margin: 5px 0; background: var(--background-secondary); border-radius: 4px; font-family: monospace; font-size: 13px;",
+                "padding: 12px; margin: 8px 0; background: var(--background-secondary); border-radius: 6px; font-family: monospace; font-size: 13px; border-left: 3px solid var(--color-red);",
             },
           });
           errorItem.createEl("span", { text: this.formatError(error) });
+        }
+
+        if (result.warnings && result.warnings.length > 0) {
+          resultsEl.createEl("h4", { text: "⚠️ Warnings:" });
+          for (const warning of result.warnings) {
+            const warnItem = resultsEl.createDiv({
+              attr: {
+                style:
+                  "padding: 8px; margin: 5px 0; background: var(--background-secondary); border-radius: 4px; font-size: 12px; color: var(--color-yellow);",
+              },
+            });
+            warnItem.createEl("span", { text: warning });
+          }
         }
       }
     } catch (err) {
       statusEl.setText(`❌ Error: ${(err as Error).message}`);
       statusEl.style.color = "var(--color-red)";
-    } finally {
-      this.isValidating = false;
     }
   }
 
@@ -94,13 +96,13 @@ export class ValidateModal extends Modal {
       return "E005: General schema violation";
     }
     if (error.includes("E006")) {
-      return "E006: Domain not in taxonomy";
+      return "E006: Domain not in taxonomy (add to akf.yaml)";
     }
     if (error.includes("E007")) {
       return "E007: created date is after updated date";
     }
     if (error.includes("E008")) {
-      return "E008: Relationship type not in allowed types";
+      return "E008: Invalid relationship type";
     }
     return error;
   }

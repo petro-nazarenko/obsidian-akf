@@ -1,8 +1,10 @@
 import { App, Plugin, PluginSettingTab, Setting } from "obsidian";
-import { SubprocessManager } from "./SubprocessManager";
+import { HttpClient } from "./HttpClient";
 import { GenerateModal } from "./GenerateModal";
 import { ValidateModal } from "./ValidateModal";
 import { AKFStatusBar } from "./StatusBar";
+import { SetupWizardModal } from "./SetupWizard";
+import { EnvironmentChecker } from "./EnvironmentChecker";
 import "../styles.css";
 
 export interface AKFSettings {
@@ -15,37 +17,48 @@ export interface AKFSettings {
   openaiApiKey: string;
   geminiApiKey: string;
   groqApiKey: string;
+  skipSetup: boolean;
+  useOllama: boolean;
+  ollamaModel: string;
 }
 
 const DEFAULT_SETTINGS: AKFSettings = {
   akfPath: "akf",
   vaultPath: "",
-  model: "auto",
+  model: "ollama",
   defaultDomain: "",
   autoStart: true,
   anthropicApiKey: "",
   openaiApiKey: "",
   geminiApiKey: "",
   groqApiKey: "",
+  skipSetup: false,
+  useOllama: true,
+  ollamaModel: "llama3",
 };
 
 export default class ObsidianAKFPlugin extends Plugin {
   settings!: AKFSettings;
-  subprocessManager!: SubprocessManager;
+  httpClient!: HttpClient;
   statusBar!: AKFStatusBar;
-  akfRunning = false;
+  envChecker!: EnvironmentChecker;
+  isServerRunning = false;
+  private serverProcess: any = null;
+  private setupShown = false;
 
   async onload() {
     await this.loadSettings();
+    
+    this.envChecker = new EnvironmentChecker(this);
+    this.httpClient = new HttpClient(this);
+    
     this.addSettingTab(new AKFSettingsTab(this.app, this));
 
     this.statusBar = new AKFStatusBar(this);
     this.statusBar.register();
 
-    this.subprocessManager = new SubprocessManager(this);
-
     if (this.settings.autoStart) {
-      this.startAKF();
+      this.initializeServer();
     }
 
     this.addCommand({
@@ -74,25 +87,148 @@ export default class ObsidianAKFPlugin extends Plugin {
       name: "Validate entire vault",
       callback: async () => {
         const vaultPath = this.settings.vaultPath || this.getVaultPath();
-        await this.subprocessManager.validate(vaultPath);
+        await this.httpClient.validate(vaultPath);
       },
     });
 
     this.addCommand({
-      id: "akf-start",
+      id: "akf-start-server",
       name: "Start AKF server",
       callback: () => {
-        this.startAKF();
+        this.initializeServer();
       },
     });
 
     this.addCommand({
-      id: "akf-stop",
-      name: "Stop AKF server",
+      id: "akf-open-settings",
+      name: "Open settings",
       callback: () => {
-        this.stopAKF();
+        (this.app as any).commands.executeCommandById("app:open-settings");
       },
     });
+
+    this.addCommand({
+      id: "akf-run-setup",
+      name: "Run setup wizard",
+      callback: () => {
+        new SetupWizardModal(this.app, this).open();
+      },
+    });
+  }
+
+  async initializeServer() {
+    if (this.isServerRunning) return;
+
+    const checks = await this.envChecker.fullCheck();
+
+    if (!checks.python) {
+      this.statusBar.setStatus("⚠️ No Python");
+      new SetupWizardModal(this.app, this).open();
+      return;
+    }
+
+    if (!checks.akf) {
+      this.statusBar.setStatus("⚙️ Installing...");
+      const installed = await this.envChecker.installAKF();
+      if (!installed) {
+        this.statusBar.setStatus("❌ Install failed");
+        return;
+      }
+    }
+
+    if (checks.akf && !checks.serverRunning) {
+      this.statusBar.setStatus("🚀 Starting...");
+      await this.startServer();
+    }
+
+    if (checks.serverRunning) {
+      this.isServerRunning = true;
+      this.statusBar.setRunning(true);
+      this.statusBar.setStatus("✅ Ready");
+    }
+  }
+
+  private async startServer(): Promise<boolean> {
+    try {
+      const port = 8000;
+      const env = this.getEnvVars();
+      
+      const { spawn } = await import("child_process");
+      
+      this.serverProcess = spawn("akf", ["serve", "--port", String(port)], {
+        stdio: ["pipe", "pipe", "pipe"],
+        shell: true,
+        env: { ...env, ...(await import("process")).env },
+        detached: false,
+      });
+
+      let output = "";
+      this.serverProcess.stdout?.on("data", (data: Buffer) => {
+        output += data.toString();
+        console.log("[AKF]", data.toString().trim());
+      });
+
+      this.serverProcess.stderr?.on("data", (data: Buffer) => {
+        console.error("[AKF Error]", data.toString().trim());
+      });
+
+      this.serverProcess.on("error", (err: Error) => {
+        console.error("[AKF] Server error:", err);
+        this.isServerRunning = false;
+        this.statusBar.setRunning(false);
+      });
+
+      this.serverProcess.on("exit", (code: number) => {
+        console.log("[AKF] Server exited with code:", code);
+        this.isServerRunning = false;
+        this.statusBar.setRunning(false);
+      });
+
+      await new Promise((resolve) => setTimeout(resolve, 3000));
+
+      const serverRunning = await this.envChecker.isServerRunning();
+      if (serverRunning) {
+        this.isServerRunning = true;
+        this.statusBar.setRunning(true);
+        return true;
+      }
+
+      return false;
+    } catch (err) {
+      console.error("[AKF] Failed to start server:", err);
+      return false;
+    }
+  }
+
+  private getEnvVars(): Record<string, string> {
+    const env: Record<string, string> = {};
+    
+    if (this.settings.anthropicApiKey) {
+      env.ANTHROPIC_API_KEY = this.settings.anthropicApiKey;
+    }
+    if (this.settings.openaiApiKey) {
+      env.OPENAI_API_KEY = this.settings.openaiApiKey;
+    }
+    if (this.settings.geminiApiKey) {
+      env.GOOGLE_API_KEY = this.settings.geminiApiKey;
+    }
+    if (this.settings.groqApiKey) {
+      env.GROQ_API_KEY = this.settings.groqApiKey;
+    }
+    if (this.settings.useOllama) {
+      env.OLLAMA_BASE_URL = "http://localhost:11434";
+    }
+    
+    return env;
+  }
+
+  async stopServer() {
+    if (this.serverProcess) {
+      this.serverProcess.kill();
+      this.serverProcess = null;
+    }
+    this.isServerRunning = false;
+    this.statusBar.setRunning(false);
   }
 
   private getVaultPath(): string {
@@ -104,22 +240,6 @@ export default class ObsidianAKFPlugin extends Plugin {
     } catch {
     }
     return ".";
-  }
-
-  async startAKF() {
-    if (this.akfRunning) return;
-    
-    const success = await this.subprocessManager.start();
-    if (success) {
-      this.akfRunning = true;
-      this.statusBar.setRunning(true);
-    }
-  }
-
-  stopAKF() {
-    this.subprocessManager.stop();
-    this.akfRunning = false;
-    this.statusBar.setRunning(false);
   }
 
   async loadSettings() {
@@ -135,7 +255,7 @@ export default class ObsidianAKFPlugin extends Plugin {
   }
 
   onunload() {
-    this.stopAKF();
+    this.stopServer();
   }
 }
 
@@ -147,66 +267,126 @@ class AKFSettingsTab extends PluginSettingTab {
     this.plugin = plugin;
   }
 
-  display(): void {
+  async display() {
     const { containerEl } = this;
     containerEl.empty();
 
-    containerEl.createEl("h2", { text: "AI Knowledge Filler" });
+    const checks = await this.plugin.envChecker.fullCheck();
 
-    containerEl.createEl("p", {
-      text: "AI-powered knowledge generation with schema validation (E001-E008)",
-      attr: { style: "color: var(--text-muted); margin-bottom: 20px;" }
+    containerEl.createEl("h2", { text: "🤖 AI Knowledge Filler" });
+
+    containerEl.createEl("div", {
+      attr: {
+        innerHTML: `
+          <p style="color: var(--text-muted); margin-bottom: 20px;">
+            AI-powered knowledge generation with schema validation
+          </p>
+        `
+      }
     });
 
-    containerEl.createEl("h3", { text: "🔑 API Keys" });
+    containerEl.createEl("h3", { text: "📊 Status" });
+
+    const statusEl = containerEl.createDiv({
+      attr: {
+        style: "padding: 15px; background: var(--background-secondary); border-radius: 8px; margin-bottom: 20px;"
+      }
+    });
+
+    this.renderStatus(statusEl, checks);
+
+    const refreshBtn = containerEl.createEl("button", {
+      text: "🔄 Refresh Status",
+      cls: "mod-cta"
+    });
+    refreshBtn.onclick = () => this.display();
+
+    containerEl.createEl("h3", { text: "🦙 Ollama (Local AI)" });
+
+    new Setting(containerEl)
+      .setName("Use Ollama")
+      .setDesc("Use local AI (free, no API key needed). Requires Ollama installed.")
+      .addToggle((toggle) =>
+        toggle
+          .setValue(this.plugin.settings.useOllama)
+          .onChange(async (value) => {
+            this.plugin.settings.useOllama = value;
+            if (value) {
+              this.plugin.settings.model = "ollama";
+            }
+            await this.plugin.saveSettings();
+          })
+      );
+
+    new Setting(containerEl)
+      .setName("Ollama model")
+      .setDesc("Model to use with Ollama")
+      .addDropdown((dropdown) =>
+        dropdown
+          .addOptions({
+            llama3: "Llama 3 (recommended)",
+            llama2: "Llama 2",
+            mistral: "Mistral",
+            codellama: "Code Llama",
+          })
+          .setValue(this.plugin.settings.ollamaModel)
+          .onChange(async (value) => {
+            this.plugin.settings.ollamaModel = value;
+            await this.plugin.saveSettings();
+          })
+      );
+
+    if (!checks.ollama) {
+      containerEl.createEl("p", {
+        text: "📥 Install Ollama from ollama.com for free local AI",
+        attr: { style: "color: var(--color-yellow);" }
+      });
+    }
+
+    containerEl.createEl("h3", { text: "🔑 Cloud API Keys" });
 
     containerEl.createEl("p", {
-      text: "Enter your API keys below. Keys are only used locally and sent to the selected LLM provider.",
+      text: "Use cloud AI (GPT-4, Claude). Only needed if not using Ollama.",
       attr: { style: "color: var(--text-muted); font-size: 0.9em; margin-bottom: 15px;" }
     });
 
     this.createApiKeySetting(
-      "Anthropic API Key",
+      "Anthropic (Claude)",
       "sk-ant-...",
-      "anthropicApiKey",
-      "console.anthropic.com"
+      "anthropicApiKey"
     );
 
     this.createApiKeySetting(
-      "OpenAI API Key",
+      "OpenAI (GPT-4)",
       "sk-...",
-      "openaiApiKey",
-      "platform.openai.com"
+      "openaiApiKey"
     );
 
     this.createApiKeySetting(
-      "Google Gemini API Key",
+      "Google (Gemini)",
       "AIza...",
-      "geminiApiKey",
-      "aistudio.google.com"
+      "geminiApiKey"
     );
 
     this.createApiKeySetting(
-      "Groq API Key",
+      "Groq",
       "gsk_...",
-      "groqApiKey",
-      "console.groq.com"
+      "groqApiKey"
     );
 
-    containerEl.createEl("h3", { text: "⚙️ Settings" });
+    containerEl.createEl("h3", { text: "⚙️ General Settings" });
 
     new Setting(containerEl)
       .setName("Default model")
-      .setDesc("Select LLM provider for generation")
+      .setDesc("LLM provider to use")
       .addDropdown((dropdown) =>
         dropdown
           .addOptions({
-            auto: "Auto (default)",
+            ollama: "Ollama (local)",
             claude: "Claude",
             gpt4: "GPT-4",
             gemini: "Gemini",
             groq: "Groq",
-            ollama: "Ollama (local)",
           })
           .setValue(this.plugin.settings.model)
           .onChange(async (value) => {
@@ -216,32 +396,8 @@ class AKFSettingsTab extends PluginSettingTab {
       );
 
     new Setting(containerEl)
-      .setName("AKF executable path")
-      .setDesc("Path to the 'akf' command. Usually just 'akf' if installed.")
-      .addText((text) =>
-        text
-          .setValue(this.plugin.settings.akfPath)
-          .onChange(async (value) => {
-            this.plugin.settings.akfPath = value || "akf";
-            await this.plugin.saveSettings();
-          })
-      );
-
-    new Setting(containerEl)
-      .setName("Vault path")
-      .setDesc("Path to your vault (auto-detected).")
-      .addText((text) =>
-        text
-          .setValue(this.plugin.settings.vaultPath)
-          .onChange(async (value) => {
-            this.plugin.settings.vaultPath = value;
-            await this.plugin.saveSettings();
-          })
-      );
-
-    new Setting(containerEl)
       .setName("Default domain")
-      .setDesc("Default domain for generated files (e.g., ai-system, devops)")
+      .setDesc("Domain for generated files (e.g., ai-system, devops)")
       .addText((text) =>
         text
           .setValue(this.plugin.settings.defaultDomain)
@@ -252,8 +408,8 @@ class AKFSettingsTab extends PluginSettingTab {
       );
 
     new Setting(containerEl)
-      .setName("Auto-start AKF server")
-      .setDesc("Start AKF server when Obsidian loads.")
+      .setName("Auto-start server")
+      .setDesc("Start server when Obsidian opens")
       .addToggle((toggle) =>
         toggle
           .setValue(this.plugin.settings.autoStart)
@@ -263,42 +419,64 @@ class AKFSettingsTab extends PluginSettingTab {
           })
       );
 
-    containerEl.createEl("h3", { text: "🚀 Server Control" });
+    containerEl.createEl("h3", { text: "🚀 Server" });
 
     new Setting(containerEl)
-      .setName("Server status")
-      .setDesc(this.plugin.akfRunning ? "🟢 Running" : "🔴 Stopped")
+      .setName("Server")
+      .setDesc(this.plugin.isServerRunning ? "🟢 Running on port 8000" : "🔴 Stopped")
       .addButton((button) =>
         button
-          .setButtonText(this.plugin.akfRunning ? "Stop Server" : "Start Server")
+          .setButtonText(this.plugin.isServerRunning ? "Stop Server" : "Start Server")
           .setCta()
           .onClick(() => {
-            if (this.plugin.akfRunning) {
-              this.plugin.stopAKF();
+            if (this.plugin.isServerRunning) {
+              this.plugin.stopServer();
             } else {
-              this.plugin.startAKF();
+              this.plugin.initializeServer();
             }
             this.display();
           })
       );
 
-    containerEl.createEl("h3", { text: "📖 Quick Start" });
+    containerEl.createEl("h3", { text: "📖 Quick Help" });
 
     containerEl.createEl("p", {
-      text: "1. Add your API key above\n2. Select a model\n3. Press Ctrl+Shift+G to generate",
+      text: "• Ctrl+Shift+G — Generate file\n• Ctrl+Shift+V — Validate file",
       attr: { style: "color: var(--text-muted); font-size: 0.85em; white-space: pre-line;" }
     });
+  }
+
+  private renderStatus(el: HTMLElement, checks: any) {
+    const items = [
+      { label: "Python", status: checks.python, ok: "✅", fail: "❌" },
+      { label: "AKF", status: checks.akf, ok: "✅", fail: "❌" },
+      { label: "Ollama", status: checks.ollama, ok: "✅", fail: "❌" },
+      { label: "Ollama running", status: checks.ollamaRunning, ok: "✅", fail: "❌" },
+      { label: "Ollama model", status: checks.ollamaModel, ok: "✅", fail: "❌" },
+      { label: "AKF Server", status: checks.serverRunning, ok: "✅", fail: "❌" },
+      { label: "API Key", status: checks.apiKey, ok: "✅", fail: "⚠️ (Ollama fallback)" },
+    ];
+
+    el.empty();
+    
+    for (const item of items) {
+      const icon = item.status ? item.ok : item.fail;
+      const color = item.status ? "var(--color-green)" : "var(--color-red)";
+      el.createEl("p", {
+        text: `${icon} ${item.label}`,
+        attr: { style: `color: ${color}; margin: 5px 0;` }
+      });
+    }
   }
 
   private createApiKeySetting(
     name: string,
     placeholder: string,
-    key: keyof AKFSettings,
-    docsUrl: string
+    key: keyof AKFSettings
   ): void {
     new Setting(this.containerEl)
       .setName(name)
-      .setDesc(`Get key at ${docsUrl}`)
+      .setDesc("Optional - only if not using Ollama")
       .addText((text) =>
         text
           .setPlaceholder(placeholder)
