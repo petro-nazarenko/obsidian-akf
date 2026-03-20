@@ -1,15 +1,24 @@
-import { App, Plugin, PluginSettingTab, Setting } from "obsidian";
+import { App, Notice, Plugin, PluginSettingTab, Setting } from "obsidian";
 import { HttpClient } from "./HttpClient";
 import { GenerateModal } from "./GenerateModal";
 import { ValidateModal } from "./ValidateModal";
 import { AKFStatusBar } from "./StatusBar";
 import { SetupWizardModal } from "./SetupWizard";
 import { EnvironmentChecker } from "./EnvironmentChecker";
+import {
+  DEFAULT_SERVER_PORT,
+  SERVER_STARTUP_POLL_INTERVAL_MS,
+  SERVER_STARTUP_MAX_ATTEMPTS,
+  SERVER_MAX_RESTARTS,
+  SERVER_RESTART_WINDOW_MS,
+  SERVER_RESTART_DELAY_MS,
+} from "./constants";
 import "../styles.css";
 
 export interface AKFSettings {
   akfPath: string;
   vaultPath: string;
+  serverPort: number;
   model: string;
   defaultDomain: string;
   autoStart: boolean;
@@ -25,6 +34,7 @@ export interface AKFSettings {
 const DEFAULT_SETTINGS: AKFSettings = {
   akfPath: "akf",
   vaultPath: "",
+  serverPort: DEFAULT_SERVER_PORT,
   model: "ollama",
   defaultDomain: "",
   autoStart: true,
@@ -45,6 +55,9 @@ export default class ObsidianAKFPlugin extends Plugin {
   isServerRunning = false;
   private serverProcess: any = null;
   private setupShown = false;
+  private intentionalStop = false;
+  private restartCount = 0;
+  private firstRestartTime = 0;
 
   async onload() {
     await this.loadSettings();
@@ -86,8 +99,20 @@ export default class ObsidianAKFPlugin extends Plugin {
       id: "akf-validate-vault",
       name: "Validate entire vault",
       callback: async () => {
+        const notice = new Notice("⏳ Validating vault...", 0);
         const vaultPath = this.settings.vaultPath || this.getVaultPath();
-        await this.httpClient.validate(vaultPath);
+        try {
+          const result = await this.httpClient.validate(vaultPath);
+          notice.hide();
+          if (result.is_valid) {
+            new Notice("✅ Vault is valid!");
+          } else {
+            new Notice(`❌ Found ${result.errors.length} error(s) — open a file and use Ctrl+Shift+V for details`);
+          }
+        } catch (err) {
+          notice.hide();
+          new Notice(`❌ Validation failed: ${(err as Error).message}`);
+        }
       },
     });
 
@@ -150,11 +175,12 @@ export default class ObsidianAKFPlugin extends Plugin {
 
   private async startServer(): Promise<boolean> {
     try {
-      const port = 8000;
+      const port = this.settings.serverPort;
       const env = this.getEnvVars();
-      
+
       const { spawn } = await import("child_process");
-      
+      this.intentionalStop = false;
+
       this.serverProcess = spawn("akf", ["serve", "--port", String(port)], {
         stdio: ["pipe", "pipe", "pipe"],
         shell: true,
@@ -162,9 +188,7 @@ export default class ObsidianAKFPlugin extends Plugin {
         detached: false,
       });
 
-      let output = "";
       this.serverProcess.stdout?.on("data", (data: Buffer) => {
-        output += data.toString();
         console.log("[AKF]", data.toString().trim());
       });
 
@@ -182,21 +206,43 @@ export default class ObsidianAKFPlugin extends Plugin {
         console.log("[AKF] Server exited with code:", code);
         this.isServerRunning = false;
         this.statusBar.setRunning(false);
+        this.maybeRestartServer();
       });
 
-      await new Promise((resolve) => setTimeout(resolve, 3000));
-
-      const serverRunning = await this.envChecker.isServerRunning();
-      if (serverRunning) {
-        this.isServerRunning = true;
-        this.statusBar.setRunning(true);
-        return true;
+      // Poll for readiness instead of a fixed delay
+      for (let i = 0; i < SERVER_STARTUP_MAX_ATTEMPTS; i++) {
+        await new Promise((r) => setTimeout(r, SERVER_STARTUP_POLL_INTERVAL_MS));
+        if (await this.envChecker.isServerRunning()) {
+          this.isServerRunning = true;
+          this.statusBar.setRunning(true);
+          return true;
+        }
       }
 
       return false;
     } catch (err) {
       console.error("[AKF] Failed to start server:", err);
       return false;
+    }
+  }
+
+  private maybeRestartServer() {
+    if (this.intentionalStop) return;
+
+    const now = Date.now();
+    if (now - this.firstRestartTime > SERVER_RESTART_WINDOW_MS) {
+      this.restartCount = 0;
+      this.firstRestartTime = now;
+    }
+
+    if (this.restartCount < SERVER_MAX_RESTARTS) {
+      this.restartCount++;
+      console.log(`[AKF] Restarting server (attempt ${this.restartCount}/${SERVER_MAX_RESTARTS})...`);
+      this.statusBar.setStatus("🔄 Restarting...");
+      setTimeout(() => this.startServer(), SERVER_RESTART_DELAY_MS);
+    } else {
+      console.error("[AKF] Server crashed too many times, giving up.");
+      this.statusBar.setStatus("❌ Server crashed");
     }
   }
 
@@ -223,6 +269,7 @@ export default class ObsidianAKFPlugin extends Plugin {
   }
 
   async stopServer() {
+    this.intentionalStop = true;
     if (this.serverProcess) {
       this.serverProcess.kill();
       this.serverProcess = null;
@@ -237,7 +284,8 @@ export default class ObsidianAKFPlugin extends Plugin {
       if ("getBasePath" in adapter) {
         return (adapter as any).getBasePath();
       }
-    } catch {
+    } catch (e) {
+      console.warn("[AKF] Could not determine vault path, falling back to '.':", e);
     }
     return ".";
   }
@@ -419,11 +467,26 @@ class AKFSettingsTab extends PluginSettingTab {
           })
       );
 
+    new Setting(containerEl)
+      .setName("Server port")
+      .setDesc("Port for the AKF server (default: 8000). Change if port is already in use.")
+      .addText((text) =>
+        text
+          .setValue(String(this.plugin.settings.serverPort))
+          .onChange(async (value) => {
+            const port = parseInt(value, 10);
+            if (!isNaN(port) && port > 0 && port < 65536) {
+              this.plugin.settings.serverPort = port;
+              await this.plugin.saveSettings();
+            }
+          })
+      );
+
     containerEl.createEl("h3", { text: "🚀 Server" });
 
     new Setting(containerEl)
       .setName("Server")
-      .setDesc(this.plugin.isServerRunning ? "🟢 Running on port 8000" : "🔴 Stopped")
+      .setDesc(this.plugin.isServerRunning ? `🟢 Running on port ${this.plugin.settings.serverPort}` : "🔴 Stopped")
       .addButton((button) =>
         button
           .setButtonText(this.plugin.isServerRunning ? "Stop Server" : "Start Server")
