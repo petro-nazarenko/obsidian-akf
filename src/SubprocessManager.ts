@@ -40,6 +40,25 @@ export class SubprocessManager {
     return ".";
   }
 
+  private getEnv(): NodeJS.ProcessEnv {
+    const env: NodeJS.ProcessEnv = { ...process.env };
+    
+    if (this.plugin.settings.anthropicApiKey) {
+      env.ANTHROPIC_API_KEY = this.plugin.settings.anthropicApiKey;
+    }
+    if (this.plugin.settings.openaiApiKey) {
+      env.OPENAI_API_KEY = this.plugin.settings.openaiApiKey;
+    }
+    if (this.plugin.settings.geminiApiKey) {
+      env.GOOGLE_API_KEY = this.plugin.settings.geminiApiKey;
+    }
+    if (this.plugin.settings.groqApiKey) {
+      env.GROQ_API_KEY = this.plugin.settings.groqApiKey;
+    }
+    
+    return env;
+  }
+
   async start(): Promise<boolean> {
     if (this.process) {
       return true;
@@ -52,6 +71,7 @@ export class SubprocessManager {
         this.process = spawn(akfPath, ["serve", "--mcp"], {
           stdio: ["pipe", "pipe", "pipe"],
           shell: true,
+          env: this.getEnv(),
         });
 
         let buffer = "";

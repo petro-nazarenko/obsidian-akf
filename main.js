@@ -44,6 +44,22 @@ var SubprocessManager = class {
     }
     return ".";
   }
+  getEnv() {
+    const env = { ...process.env };
+    if (this.plugin.settings.anthropicApiKey) {
+      env.ANTHROPIC_API_KEY = this.plugin.settings.anthropicApiKey;
+    }
+    if (this.plugin.settings.openaiApiKey) {
+      env.OPENAI_API_KEY = this.plugin.settings.openaiApiKey;
+    }
+    if (this.plugin.settings.geminiApiKey) {
+      env.GOOGLE_API_KEY = this.plugin.settings.geminiApiKey;
+    }
+    if (this.plugin.settings.groqApiKey) {
+      env.GROQ_API_KEY = this.plugin.settings.groqApiKey;
+    }
+    return env;
+  }
   async start() {
     if (this.process) {
       return true;
@@ -53,7 +69,8 @@ var SubprocessManager = class {
       try {
         this.process = (0, import_child_process.spawn)(akfPath, ["serve", "--mcp"], {
           stdio: ["pipe", "pipe", "pipe"],
-          shell: true
+          shell: true,
+          env: this.getEnv()
         });
         let buffer = "";
         this.process.stdout?.on("data", (data) => {
@@ -468,7 +485,11 @@ var DEFAULT_SETTINGS = {
   vaultPath: "",
   model: "auto",
   defaultDomain: "",
-  autoStart: true
+  autoStart: true,
+  anthropicApiKey: "",
+  openaiApiKey: "",
+  geminiApiKey: "",
+  groqApiKey: ""
 };
 var ObsidianAKFPlugin = class extends import_obsidian3.Plugin {
   constructor() {
@@ -571,20 +592,42 @@ var AKFSettingsTab = class extends import_obsidian3.PluginSettingTab {
   display() {
     const { containerEl } = this;
     containerEl.empty();
-    containerEl.createEl("h2", { text: "AI Knowledge Filler Settings" });
-    new import_obsidian3.Setting(containerEl).setName("AKF executable path").setDesc("Path to the 'akf' command. Leave as 'akf' if it's in your PATH.").addText(
-      (text) => text.setValue(this.plugin.settings.akfPath).onChange(async (value) => {
-        this.plugin.settings.akfPath = value || "akf";
-        await this.plugin.saveSettings();
-      })
+    containerEl.createEl("h2", { text: "AI Knowledge Filler" });
+    containerEl.createEl("p", {
+      text: "AI-powered knowledge generation with schema validation (E001-E008)",
+      attr: { style: "color: var(--text-muted); margin-bottom: 20px;" }
+    });
+    containerEl.createEl("h3", { text: "\u{1F511} API Keys" });
+    containerEl.createEl("p", {
+      text: "Enter your API keys below. Keys are only used locally and sent to the selected LLM provider.",
+      attr: { style: "color: var(--text-muted); font-size: 0.9em; margin-bottom: 15px;" }
+    });
+    this.createApiKeySetting(
+      "Anthropic API Key",
+      "sk-ant-...",
+      "anthropicApiKey",
+      "console.anthropic.com"
     );
-    new import_obsidian3.Setting(containerEl).setName("Vault path").setDesc("Path to your Obsidian vault (auto-detected).").addText(
-      (text) => text.setValue(this.plugin.settings.vaultPath).onChange(async (value) => {
-        this.plugin.settings.vaultPath = value;
-        await this.plugin.saveSettings();
-      })
+    this.createApiKeySetting(
+      "OpenAI API Key",
+      "sk-...",
+      "openaiApiKey",
+      "platform.openai.com"
     );
-    new import_obsidian3.Setting(containerEl).setName("Default model").setDesc("LLM provider/model (auto, claude, gpt4, gemini, groq, ollama)").addDropdown(
+    this.createApiKeySetting(
+      "Google Gemini API Key",
+      "AIza...",
+      "geminiApiKey",
+      "aistudio.google.com"
+    );
+    this.createApiKeySetting(
+      "Groq API Key",
+      "gsk_...",
+      "groqApiKey",
+      "console.groq.com"
+    );
+    containerEl.createEl("h3", { text: "\u2699\uFE0F Settings" });
+    new import_obsidian3.Setting(containerEl).setName("Default model").setDesc("Select LLM provider for generation").addDropdown(
       (dropdown) => dropdown.addOptions({
         auto: "Auto (default)",
         claude: "Claude",
@@ -597,18 +640,31 @@ var AKFSettingsTab = class extends import_obsidian3.PluginSettingTab {
         await this.plugin.saveSettings();
       })
     );
+    new import_obsidian3.Setting(containerEl).setName("AKF executable path").setDesc("Path to the 'akf' command. Usually just 'akf' if installed.").addText(
+      (text) => text.setValue(this.plugin.settings.akfPath).onChange(async (value) => {
+        this.plugin.settings.akfPath = value || "akf";
+        await this.plugin.saveSettings();
+      })
+    );
+    new import_obsidian3.Setting(containerEl).setName("Vault path").setDesc("Path to your vault (auto-detected).").addText(
+      (text) => text.setValue(this.plugin.settings.vaultPath).onChange(async (value) => {
+        this.plugin.settings.vaultPath = value;
+        await this.plugin.saveSettings();
+      })
+    );
     new import_obsidian3.Setting(containerEl).setName("Default domain").setDesc("Default domain for generated files (e.g., ai-system, devops)").addText(
       (text) => text.setValue(this.plugin.settings.defaultDomain).onChange(async (value) => {
         this.plugin.settings.defaultDomain = value;
         await this.plugin.saveSettings();
       })
     );
-    new import_obsidian3.Setting(containerEl).setName("Auto-start AKF server").setDesc("Automatically start AKF server when Obsidian loads.").addToggle(
+    new import_obsidian3.Setting(containerEl).setName("Auto-start AKF server").setDesc("Start AKF server when Obsidian loads.").addToggle(
       (toggle) => toggle.setValue(this.plugin.settings.autoStart).onChange(async (value) => {
         this.plugin.settings.autoStart = value;
         await this.plugin.saveSettings();
       })
     );
+    containerEl.createEl("h3", { text: "\u{1F680} Server Control" });
     new import_obsidian3.Setting(containerEl).setName("Server status").setDesc(this.plugin.akfRunning ? "\u{1F7E2} Running" : "\u{1F534} Stopped").addButton(
       (button) => button.setButtonText(this.plugin.akfRunning ? "Stop Server" : "Start Server").setCta().onClick(() => {
         if (this.plugin.akfRunning) {
@@ -618,6 +674,19 @@ var AKFSettingsTab = class extends import_obsidian3.PluginSettingTab {
         }
         this.display();
       })
+    );
+    containerEl.createEl("h3", { text: "\u{1F4D6} Quick Start" });
+    containerEl.createEl("p", {
+      text: "1. Add your API key above\n2. Select a model\n3. Press Ctrl+Shift+G to generate",
+      attr: { style: "color: var(--text-muted); font-size: 0.85em; white-space: pre-line;" }
+    });
+  }
+  createApiKeySetting(name, placeholder, key, docsUrl) {
+    new import_obsidian3.Setting(this.containerEl).setName(name).setDesc(`Get key at ${docsUrl}`).addText(
+      (text) => text.setPlaceholder(placeholder).setValue(this.plugin.settings[key] || "").onChange(async (value) => {
+        this.plugin.settings[key] = value;
+        await this.plugin.saveSettings();
+      }).inputEl.setAttribute("type", "password")
     );
   }
 };

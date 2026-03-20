@@ -15,6 +15,7 @@ Generate validated Markdown knowledge files using AI (Claude, GPT-4, Gemini, Gro
 - **Schema Enforcement** - Automatic validation of YAML frontmatter fields
 - **Multi-Provider** - Works with Claude, GPT-4, Gemini, Groq, Ollama
 - **External Taxonomy** - Configure domains and types via akf.yaml
+- **API Keys in Settings** - Easy configuration of LLM providers
 
 ## Validation Error Codes
 
@@ -31,7 +32,7 @@ Generate validated Markdown knowledge files using AI (Claude, GPT-4, Gemini, Gro
 
 ## Installation
 
-### Option 1: BRAT (Recommended for beta)
+### Option 1: BRAT (Recommended)
 
 1. Install **Obsidian42 - BRAT** from Community Plugins
 2. Open BRAT settings → Add Beta Plugin
@@ -41,16 +42,40 @@ Generate validated Markdown knowledge files using AI (Claude, GPT-4, Gemini, Gro
 ### Option 2: Manual
 
 1. Clone this repo
-2. Run `npm install`
-3. Run `npm run build`
-4. Copy `main.js`, `manifest.json`, and `styles.css` to `.obsidian/plugins/obsidian-akf/`
-5. Enable the plugin in Obsidian
+2. Run `npm install && npm run build`
+3. Copy `main.js`, `manifest.json`, and `styles.css` to `.obsidian/plugins/obsidian-akf/`
+4. Enable the plugin in Obsidian
 
-## Requirements
+## Setup
 
-- [AI Knowledge Filler](https://github.com/petro-nazarenko/ai-knowledge-filler) installed (`pip install ai-knowledge-filler`)
-- Python 3.10+
-- API key for at least one LLM provider (ANTHROPIC_API_KEY, OPENAI_API_KEY, etc.)
+### 1. Install AI Knowledge Filler
+
+```bash
+pip install ai-knowledge-filler[mcp]
+```
+
+### 2. Configure API Keys
+
+Open Obsidian Settings → AI Knowledge Filler and enter your API keys:
+
+| Provider | Key Format | Get Key At |
+|----------|------------|------------|
+| **Claude** | `sk-ant-...` | [console.anthropic.com](https://console.anthropic.com) |
+| **OpenAI** | `sk-...` | [platform.openai.com](https://platform.openai.com) |
+| **Gemini** | `AIza...` | [aistudio.google.com](https://aistudio.google.com) |
+| **Groq** | `gsk_...` | [console.groq.com](https://console.groq.com) |
+
+Keys are stored locally and only sent to the selected LLM provider.
+
+### 3. Select Model
+
+In plugin settings, choose your preferred LLM:
+- **Auto** - Uses first available provider
+- **Claude** - Anthropic's Claude models
+- **GPT-4** - OpenAI's GPT-4
+- **Gemini** - Google's Gemini
+- **Groq** - Groq (fast, free tier available)
+- **Ollama** - Local models (no API key needed)
 
 ## Usage
 
@@ -61,14 +86,6 @@ Generate validated Markdown knowledge files using AI (Claude, GPT-4, Gemini, Gro
 | Generate knowledge file | `Ctrl+Shift+G` | Open generation modal |
 | Validate current file | `Ctrl+Shift+V` | Validate active file |
 | Validate entire vault | - | Validate all .md files |
-
-### Settings
-
-- **AKF executable path** - Path to `akf` command (default: `akf`)
-- **Vault path** - Path to your Obsidian vault
-- **Default model** - LLM provider to use
-- **Default domain** - Default domain for generated files
-- **Auto-start** - Start AKF server on Obsidian launch
 
 ### Generate a Knowledge File
 
@@ -93,6 +110,28 @@ User Prompt → AKF CLI → LLM → Validation Engine → Error Normalizer → R
 ```
 
 The AKF pipeline guarantees that only schema-valid files reach your vault.
+
+## Requirements
+
+- Obsidian 1.0.0+
+- Python 3.10+
+- ai-knowledge-filler: `pip install ai-knowledge-filler[mcp]`
+- API key for at least one LLM provider
+
+## Troubleshooting
+
+### "AKF server not found"
+- Ensure `akf` is installed: `pip install ai-knowledge-filler`
+- Or set full path in plugin settings
+
+### "No API key configured"
+- Open Settings → AI Knowledge Filler
+- Enter your API key in the corresponding field
+
+### Server won't start
+- Check status bar indicator (🟢 = running, 🔴 = stopped)
+- Click the status bar to toggle server
+- Check Obsidian console for errors (View → Toggle Developer Tools)
 
 ## Related
 

@@ -11,6 +11,10 @@ export interface AKFSettings {
   model: string;
   defaultDomain: string;
   autoStart: boolean;
+  anthropicApiKey: string;
+  openaiApiKey: string;
+  geminiApiKey: string;
+  groqApiKey: string;
 }
 
 const DEFAULT_SETTINGS: AKFSettings = {
@@ -19,6 +23,10 @@ const DEFAULT_SETTINGS: AKFSettings = {
   model: "auto",
   defaultDomain: "",
   autoStart: true,
+  anthropicApiKey: "",
+  openaiApiKey: "",
+  geminiApiKey: "",
+  groqApiKey: "",
 };
 
 export default class ObsidianAKFPlugin extends Plugin {
@@ -143,35 +151,53 @@ class AKFSettingsTab extends PluginSettingTab {
     const { containerEl } = this;
     containerEl.empty();
 
-    containerEl.createEl("h2", { text: "AI Knowledge Filler Settings" });
+    containerEl.createEl("h2", { text: "AI Knowledge Filler" });
 
-    new Setting(containerEl)
-      .setName("AKF executable path")
-      .setDesc("Path to the 'akf' command. Leave as 'akf' if it's in your PATH.")
-      .addText((text) =>
-        text
-          .setValue(this.plugin.settings.akfPath)
-          .onChange(async (value) => {
-            this.plugin.settings.akfPath = value || "akf";
-            await this.plugin.saveSettings();
-          })
-      );
+    containerEl.createEl("p", {
+      text: "AI-powered knowledge generation with schema validation (E001-E008)",
+      attr: { style: "color: var(--text-muted); margin-bottom: 20px;" }
+    });
 
-    new Setting(containerEl)
-      .setName("Vault path")
-      .setDesc("Path to your Obsidian vault (auto-detected).")
-      .addText((text) =>
-        text
-          .setValue(this.plugin.settings.vaultPath)
-          .onChange(async (value) => {
-            this.plugin.settings.vaultPath = value;
-            await this.plugin.saveSettings();
-          })
-      );
+    containerEl.createEl("h3", { text: "🔑 API Keys" });
+
+    containerEl.createEl("p", {
+      text: "Enter your API keys below. Keys are only used locally and sent to the selected LLM provider.",
+      attr: { style: "color: var(--text-muted); font-size: 0.9em; margin-bottom: 15px;" }
+    });
+
+    this.createApiKeySetting(
+      "Anthropic API Key",
+      "sk-ant-...",
+      "anthropicApiKey",
+      "console.anthropic.com"
+    );
+
+    this.createApiKeySetting(
+      "OpenAI API Key",
+      "sk-...",
+      "openaiApiKey",
+      "platform.openai.com"
+    );
+
+    this.createApiKeySetting(
+      "Google Gemini API Key",
+      "AIza...",
+      "geminiApiKey",
+      "aistudio.google.com"
+    );
+
+    this.createApiKeySetting(
+      "Groq API Key",
+      "gsk_...",
+      "groqApiKey",
+      "console.groq.com"
+    );
+
+    containerEl.createEl("h3", { text: "⚙️ Settings" });
 
     new Setting(containerEl)
       .setName("Default model")
-      .setDesc("LLM provider/model (auto, claude, gpt4, gemini, groq, ollama)")
+      .setDesc("Select LLM provider for generation")
       .addDropdown((dropdown) =>
         dropdown
           .addOptions({
@@ -190,6 +216,30 @@ class AKFSettingsTab extends PluginSettingTab {
       );
 
     new Setting(containerEl)
+      .setName("AKF executable path")
+      .setDesc("Path to the 'akf' command. Usually just 'akf' if installed.")
+      .addText((text) =>
+        text
+          .setValue(this.plugin.settings.akfPath)
+          .onChange(async (value) => {
+            this.plugin.settings.akfPath = value || "akf";
+            await this.plugin.saveSettings();
+          })
+      );
+
+    new Setting(containerEl)
+      .setName("Vault path")
+      .setDesc("Path to your vault (auto-detected).")
+      .addText((text) =>
+        text
+          .setValue(this.plugin.settings.vaultPath)
+          .onChange(async (value) => {
+            this.plugin.settings.vaultPath = value;
+            await this.plugin.saveSettings();
+          })
+      );
+
+    new Setting(containerEl)
       .setName("Default domain")
       .setDesc("Default domain for generated files (e.g., ai-system, devops)")
       .addText((text) =>
@@ -203,7 +253,7 @@ class AKFSettingsTab extends PluginSettingTab {
 
     new Setting(containerEl)
       .setName("Auto-start AKF server")
-      .setDesc("Automatically start AKF server when Obsidian loads.")
+      .setDesc("Start AKF server when Obsidian loads.")
       .addToggle((toggle) =>
         toggle
           .setValue(this.plugin.settings.autoStart)
@@ -212,6 +262,8 @@ class AKFSettingsTab extends PluginSettingTab {
             await this.plugin.saveSettings();
           })
       );
+
+    containerEl.createEl("h3", { text: "🚀 Server Control" });
 
     new Setting(containerEl)
       .setName("Server status")
@@ -228,6 +280,34 @@ class AKFSettingsTab extends PluginSettingTab {
             }
             this.display();
           })
+      );
+
+    containerEl.createEl("h3", { text: "📖 Quick Start" });
+
+    containerEl.createEl("p", {
+      text: "1. Add your API key above\n2. Select a model\n3. Press Ctrl+Shift+G to generate",
+      attr: { style: "color: var(--text-muted); font-size: 0.85em; white-space: pre-line;" }
+    });
+  }
+
+  private createApiKeySetting(
+    name: string,
+    placeholder: string,
+    key: keyof AKFSettings,
+    docsUrl: string
+  ): void {
+    new Setting(this.containerEl)
+      .setName(name)
+      .setDesc(`Get key at ${docsUrl}`)
+      .addText((text) =>
+        text
+          .setPlaceholder(placeholder)
+          .setValue((this.plugin.settings as any)[key] as string || "")
+          .onChange(async (value) => {
+            (this.plugin.settings as any)[key] = value;
+            await this.plugin.saveSettings();
+          })
+          .inputEl.setAttribute("type", "password")
       );
   }
 }
