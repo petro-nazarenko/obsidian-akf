@@ -1,5 +1,6 @@
-import { App, Modal, Setting } from "obsidian";
+import { App, Modal, Setting, TFile } from "obsidian";
 import ObsidianAKFPlugin from "./main";
+import { MODAL_CLOSE_DELAY_MS } from "./constants";
 
 export class GenerateModal extends Modal {
   plugin: ObsidianAKFPlugin;
@@ -17,7 +18,7 @@ export class GenerateModal extends Modal {
   onOpen() {
     const { contentEl } = this;
     contentEl.empty();
-    
+
     contentEl.createEl("h2", { text: "🤖 Generate Knowledge File" });
 
     if (!this.plugin.isServerRunning) {
@@ -25,13 +26,7 @@ export class GenerateModal extends Modal {
         text: "Server is starting...",
         attr: { style: "color: var(--text-muted);" }
       });
-      
-      setTimeout(() => {
-        (this.plugin as any).initializeServer();
-        this.renderForm(contentEl);
-      }, 100);
-      
-      return;
+      this.plugin.initializeServer();
     }
 
     this.renderForm(contentEl);
@@ -40,6 +35,8 @@ export class GenerateModal extends Modal {
   private renderForm(contentEl: HTMLElement) {
     contentEl.empty();
     contentEl.createEl("h2", { text: "🤖 Generate Knowledge File" });
+
+    let promptInput: HTMLTextAreaElement;
 
     new Setting(contentEl)
       .setName("What do you want to create?")
@@ -52,6 +49,7 @@ export class GenerateModal extends Modal {
         });
         text.inputEl.setAttr("rows", 4);
         text.inputEl.setAttr("style", "width: 100%;");
+        promptInput = text.inputEl;
       });
 
     new Setting(contentEl)
@@ -99,9 +97,25 @@ export class GenerateModal extends Modal {
       cls: "mod-cta",
     });
 
+    // Disable until user enters a prompt
+    generateBtn.setAttribute("disabled", "true");
+
     const cancelBtn = buttonContainer.createEl("button", {
       text: "Cancel",
     });
+
+    // Enable/disable generate button based on prompt content
+    setTimeout(() => {
+      if (promptInput) {
+        promptInput.addEventListener("input", () => {
+          if (promptInput.value.trim()) {
+            generateBtn.removeAttribute("disabled");
+          } else {
+            generateBtn.setAttribute("disabled", "true");
+          }
+        });
+      }
+    }, 0);
 
     cancelBtn.onclick = () => {
       this.close();
@@ -114,7 +128,7 @@ export class GenerateModal extends Modal {
       }
 
       this.isGenerating = true;
-      generateBtn.setAttr("disabled", true);
+      generateBtn.setAttribute("disabled", "true");
       generateBtn.setText("⏳ Generating...");
       statusEl.setText("🚀 Sending request to AI...");
 
@@ -127,18 +141,18 @@ export class GenerateModal extends Modal {
 
         if (result.success && result.file_path) {
           statusEl.setText(`✅ Success! Created: ${result.file_path}`);
-          
+
           setTimeout(async () => {
             try {
-              const file = await this.plugin.app.vault.getAbstractFileByPath(result.file_path!);
-              if (file && file instanceof this.plugin.app.vault.getFiles().constructor) {
-                await this.plugin.app.workspace.getLeaf().openFile(file as any);
+              const file = this.plugin.app.vault.getAbstractFileByPath(result.file_path!);
+              if (file instanceof TFile) {
+                await this.plugin.app.workspace.getLeaf().openFile(file);
               }
             } catch {
               console.log("[AKF] Could not open file:", result.file_path);
             }
             this.close();
-          }, 1500);
+          }, MODAL_CLOSE_DELAY_MS);
         } else {
           const errorMsg = result.errors.length > 0
             ? result.errors.slice(0, 3).join("\n")

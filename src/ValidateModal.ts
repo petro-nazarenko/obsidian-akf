@@ -1,4 +1,4 @@
-import { App, Modal } from "obsidian";
+import { App, ButtonComponent, Modal } from "obsidian";
 import ObsidianAKFPlugin from "./main";
 
 export class ValidateModal extends Modal {
@@ -31,6 +31,14 @@ export class ValidateModal extends Modal {
     });
 
     statusEl.setText("⏳ Validating...");
+
+    const footerEl = contentEl.createDiv({
+      attr: { style: "margin-top: 20px; display: flex; justify-content: flex-end;" },
+    });
+
+    new ButtonComponent(footerEl)
+      .setButtonText("Close")
+      .onClick(() => this.close());
 
     this.runValidation(statusEl, resultsEl);
   }

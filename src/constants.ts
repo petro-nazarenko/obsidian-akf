@@ -10,3 +10,7 @@ export const SERVER_RESTART_DELAY_MS = 2000;
 
 export const HEALTH_TIMEOUT_MS = 5_000;
 export const OLLAMA_START_DELAY_MS = 2000;
+
+export const HTTP_GENERATE_TIMEOUT_MS = 60_000;
+export const HTTP_DEFAULT_TIMEOUT_MS = 10_000;
+export const MODAL_CLOSE_DELAY_MS = 1500;

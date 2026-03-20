@@ -272,7 +272,8 @@ export default class ObsidianAKFPlugin extends Plugin {
       if ("getBasePath" in adapter) {
         return (adapter as any).getBasePath();
       }
-    } catch {
+    } catch (e) {
+      console.warn("[AKF] Could not determine vault path, falling back to '.':", e);
     }
     return ".";
   }

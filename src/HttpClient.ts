@@ -1,5 +1,9 @@
 import ObsidianAKFPlugin from "./main";
-import { DEFAULT_SERVER_PORT } from "./constants";
+import {
+  DEFAULT_SERVER_PORT,
+  HTTP_GENERATE_TIMEOUT_MS,
+  HTTP_DEFAULT_TIMEOUT_MS,
+} from "./constants";
 
 export interface GenerateResult {
   success: boolean;
@@ -33,6 +37,20 @@ export class HttpClient {
     return this.plugin.settings.model || "auto";
   }
 
+  private async fetchWithTimeout(
+    url: string,
+    options: RequestInit,
+    timeoutMs: number
+  ): Promise<Response> {
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), timeoutMs);
+    try {
+      return await fetch(url, { ...options, signal: controller.signal });
+    } finally {
+      clearTimeout(timer);
+    }
+  }
+
   async generate(
     prompt: string,
     domain?: string,
@@ -48,22 +66,24 @@ export class HttpClient {
     }
 
     try {
-      const vaultPath = this.plugin.settings.vaultPath || 
+      const vaultPath = this.plugin.settings.vaultPath ||
         (this.plugin as any).getVaultPath?.() || ".";
 
-      const response = await fetch(`${this.baseUrl}/v1/generate`, {
-        method: "POST",
-        headers: {
-          "Content-Type": "application/json",
+      const response = await this.fetchWithTimeout(
+        `${this.baseUrl}/v1/generate`,
+        {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            prompt,
+            output: vaultPath,
+            model: this.getModel(),
+            domain: domain || this.plugin.settings.defaultDomain || undefined,
+            type: type || undefined,
+          }),
         },
-        body: JSON.stringify({
-          prompt,
-          output: vaultPath,
-          model: this.getModel(),
-          domain: domain || this.plugin.settings.defaultDomain || undefined,
-          type: type || undefined,
-        }),
-      });
+        HTTP_GENERATE_TIMEOUT_MS
+      );
 
       if (!response.ok) {
         const error = await response.text();
@@ -76,7 +96,7 @@ export class HttpClient {
       }
 
       const data = await response.json();
-      
+
       return {
         success: data.success ?? true,
         file_path: data.file_path ?? data.output ?? null,
@@ -85,11 +105,14 @@ export class HttpClient {
         content: data.content,
       };
     } catch (err) {
+      const msg = (err as Error).name === "AbortError"
+        ? "Request timed out (server took too long to respond)"
+        : (err as Error).message;
       return {
         success: false,
         file_path: null,
         attempts: 0,
-        errors: [(err as Error).message],
+        errors: [msg],
       };
     }
   }
@@ -103,13 +126,15 @@ export class HttpClient {
     }
 
     try {
-      const response = await fetch(`${this.baseUrl}/v1/validate`, {
-        method: "POST",
-        headers: {
-          "Content-Type": "application/json",
+      const response = await this.fetchWithTimeout(
+        `${this.baseUrl}/v1/validate`,
+        {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ path }),
         },
-        body: JSON.stringify({ path }),
-      });
+        HTTP_GENERATE_TIMEOUT_MS
+      );
 
       if (!response.ok) {
         const error = await response.text();
@@ -120,17 +145,17 @@ export class HttpClient {
       }
 
       const data = await response.json();
-      
+
       return {
         is_valid: data.is_valid ?? data.valid ?? true,
         errors: data.errors ?? [],
         warnings: data.warnings,
       };
     } catch (err) {
-      return {
-        is_valid: false,
-        errors: [(err as Error).message],
-      };
+      const msg = (err as Error).name === "AbortError"
+        ? "Request timed out (server took too long to respond)"
+        : (err as Error).message;
+      return { is_valid: false, errors: [msg] };
     }
   }
 
@@ -140,13 +165,15 @@ export class HttpClient {
     }
 
     try {
-      const response = await fetch(`${this.baseUrl}/v1/enrich`, {
-        method: "POST",
-        headers: {
-          "Content-Type": "application/json",
+      const response = await this.fetchWithTimeout(
+        `${this.baseUrl}/v1/enrich`,
+        {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ path, force }),
         },
-        body: JSON.stringify({ path, force }),
-      });
+        HTTP_DEFAULT_TIMEOUT_MS
+      );
 
       if (!response.ok) {
         const error = await response.text();
@@ -167,17 +194,19 @@ export class HttpClient {
     try {
       const vaultPath = this.plugin.settings.vaultPath || ".";
 
-      const response = await fetch(`${this.baseUrl}/v1/batch`, {
-        method: "POST",
-        headers: {
-          "Content-Type": "application/json",
+      const response = await this.fetchWithTimeout(
+        `${this.baseUrl}/v1/batch`,
+        {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            plan: prompts.map((p) => ({ prompt: p })),
+            output: vaultPath,
+            model: this.getModel(),
+          }),
         },
-        body: JSON.stringify({
-          plan: prompts.map((p) => ({ prompt: p })),
-          output: vaultPath,
-          model: this.getModel(),
-        }),
-      });
+        HTTP_DEFAULT_TIMEOUT_MS
+      );
 
       if (!response.ok) {
         const error = await response.text();
