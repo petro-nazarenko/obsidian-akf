@@ -1,4 +1,5 @@
 import ObsidianAKFPlugin from "./main";
+import { DEFAULT_SERVER_PORT } from "./constants";
 
 export interface GenerateResult {
   success: boolean;
@@ -16,10 +17,13 @@ export interface ValidateResult {
 
 export class HttpClient {
   private plugin: ObsidianAKFPlugin;
-  private baseUrl = "http://localhost:8000";
 
   constructor(plugin: ObsidianAKFPlugin) {
     this.plugin = plugin;
+  }
+
+  private get baseUrl(): string {
+    return `http://localhost:${this.plugin.settings.serverPort ?? DEFAULT_SERVER_PORT}`;
   }
 
   private getModel(): string {
@@ -144,6 +148,11 @@ export class HttpClient {
         body: JSON.stringify({ path, force }),
       });
 
+      if (!response.ok) {
+        const error = await response.text();
+        return { enriched: 0, skipped: 0, failed: 1, errors: [`HTTP ${response.status}: ${error}`] };
+      }
+
       return await response.json();
     } catch (err) {
       return { enriched: 0, skipped: 0, failed: 1, errors: [(err as Error).message] };
@@ -169,6 +178,11 @@ export class HttpClient {
           model: this.getModel(),
         }),
       });
+
+      if (!response.ok) {
+        const error = await response.text();
+        return { total: 0, ok: 0, failed: prompts.length, errors: [`HTTP ${response.status}: ${error}`] };
+      }
 
       return await response.json();
     } catch (err) {

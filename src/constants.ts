@@ -1,0 +1,12 @@
+export const DEFAULT_SERVER_PORT = 8000;
+export const OLLAMA_PORT = 11434;
+
+export const SERVER_STARTUP_POLL_INTERVAL_MS = 1000;
+export const SERVER_STARTUP_MAX_ATTEMPTS = 8;
+
+export const SERVER_MAX_RESTARTS = 3;
+export const SERVER_RESTART_WINDOW_MS = 60_000;
+export const SERVER_RESTART_DELAY_MS = 2000;
+
+export const HEALTH_TIMEOUT_MS = 5_000;
+export const OLLAMA_START_DELAY_MS = 2000;

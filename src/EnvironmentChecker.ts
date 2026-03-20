@@ -1,4 +1,10 @@
 import { exec, ExecException } from "child_process";
+import {
+  DEFAULT_SERVER_PORT,
+  OLLAMA_PORT,
+  HEALTH_TIMEOUT_MS,
+  OLLAMA_START_DELAY_MS,
+} from "./constants";
 
 export interface EnvironmentCheck {
   python: boolean;
@@ -25,6 +31,18 @@ export class EnvironmentChecker {
     });
   }
 
+  private async fetchWithTimeout(url: string): Promise<boolean> {
+    try {
+      const controller = new AbortController();
+      const timer = setTimeout(() => controller.abort(), HEALTH_TIMEOUT_MS);
+      const response = await fetch(url, { signal: controller.signal });
+      clearTimeout(timer);
+      return response.ok;
+    } catch {
+      return false;
+    }
+  }
+
   async checkPython(): Promise<boolean> {
     const result = await this.runCommand("python --version");
     if (result.success) return true;
@@ -43,13 +61,16 @@ export class EnvironmentChecker {
   }
 
   async isOllamaRunning(): Promise<boolean> {
-    const result = await this.runCommand("curl -s http://localhost:11434/api/tags 2>/dev/null || echo 'not_running'");
-    return result.stdout.includes("models");
+    return this.fetchWithTimeout(`http://localhost:${OLLAMA_PORT}/api/tags`);
   }
 
   async hasOllamaModel(): Promise<boolean> {
-    const result = await this.runCommand('ollama list 2>/dev/null || echo ""');
-    return result.stdout.includes("llama") || result.stdout.includes("mistral") || result.stdout.includes("codellama");
+    const result = await this.runCommand("ollama list");
+    return (
+      result.stdout.includes("llama") ||
+      result.stdout.includes("mistral") ||
+      result.stdout.includes("codellama")
+    );
   }
 
   async checkApiKey(): Promise<boolean> {
@@ -63,20 +84,21 @@ export class EnvironmentChecker {
   }
 
   async isServerRunning(): Promise<boolean> {
-    const result = await this.runCommand("curl -s http://localhost:8000/health 2>/dev/null || echo 'not_running'");
-    return result.stdout.includes("ok") || result.stdout.includes("true");
+    const port = this.plugin.settings?.serverPort ?? DEFAULT_SERVER_PORT;
+    return this.fetchWithTimeout(`http://localhost:${port}/health`);
   }
 
   async fullCheck(): Promise<EnvironmentCheck> {
-    const [python, akf, ollama, ollamaRunning, ollamaModel, apiKey, serverRunning] = await Promise.all([
-      this.checkPython(),
-      this.checkAKF(),
-      this.checkOllama(),
-      this.isOllamaRunning(),
-      this.hasOllamaModel(),
-      this.checkApiKey(),
-      this.isServerRunning(),
-    ]);
+    const [python, akf, ollama, ollamaRunning, ollamaModel, apiKey, serverRunning] =
+      await Promise.all([
+        this.checkPython(),
+        this.checkAKF(),
+        this.checkOllama(),
+        this.isOllamaRunning(),
+        this.hasOllamaModel(),
+        this.checkApiKey(),
+        this.isServerRunning(),
+      ]);
 
     return {
       python,
@@ -125,12 +147,13 @@ export class EnvironmentChecker {
 
   startOllama(): Promise<boolean> {
     return new Promise((resolve) => {
-      exec("start /B ollama serve", (error: ExecException | null) => {
+      const cmd = process.platform === "win32" ? "start /B ollama serve" : "ollama serve &";
+      exec(cmd, (error: ExecException | null) => {
         if (error) {
           console.error("[AKF] Ollama start failed:", error);
           resolve(false);
         } else {
-          setTimeout(() => resolve(true), 2000);
+          setTimeout(() => resolve(true), OLLAMA_START_DELAY_MS);
         }
       });
     });
