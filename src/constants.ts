@@ -14,3 +14,6 @@ export const OLLAMA_START_DELAY_MS = 2000;
 export const HTTP_GENERATE_TIMEOUT_MS = 60_000;
 export const HTTP_DEFAULT_TIMEOUT_MS = 10_000;
 export const MODAL_CLOSE_DELAY_MS = 1500;
+
+export const HTTP_MAX_RETRIES = 3;
+export const HTTP_RETRY_DELAY_MS = 1000;

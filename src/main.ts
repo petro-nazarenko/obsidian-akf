@@ -1,4 +1,4 @@
-import { App, Plugin, PluginSettingTab, Setting } from "obsidian";
+import { App, Notice, Plugin, PluginSettingTab, Setting } from "obsidian";
 import { HttpClient } from "./HttpClient";
 import { GenerateModal } from "./GenerateModal";
 import { ValidateModal } from "./ValidateModal";
@@ -99,8 +99,20 @@ export default class ObsidianAKFPlugin extends Plugin {
       id: "akf-validate-vault",
       name: "Validate entire vault",
       callback: async () => {
+        const notice = new Notice("⏳ Validating vault...", 0);
         const vaultPath = this.settings.vaultPath || this.getVaultPath();
-        await this.httpClient.validate(vaultPath);
+        try {
+          const result = await this.httpClient.validate(vaultPath);
+          notice.hide();
+          if (result.is_valid) {
+            new Notice("✅ Vault is valid!");
+          } else {
+            new Notice(`❌ Found ${result.errors.length} error(s) — open a file and use Ctrl+Shift+V for details`);
+          }
+        } catch (err) {
+          notice.hide();
+          new Notice(`❌ Validation failed: ${(err as Error).message}`);
+        }
       },
     });
 
