@@ -1,0 +1,28 @@
+{
+  "name": "obsidian-akf",
+  "version": "0.1.0",
+  "description": "AI Knowledge Filler - AI-powered structured knowledge generation for Obsidian",
+  "main": "main.js",
+  "scripts": {
+    "dev": "node esbuild.config.mjs",
+    "build": "tsc -noEmit && node esbuild.config.mjs",
+    "lint": "tsc --noEmit"
+  },
+  "keywords": [
+    "obsidian",
+    "obsidian-plugin",
+    "ai",
+    "knowledge-management",
+    "llm",
+    "gpt",
+    "claude"
+  ],
+  "author": "Petro Nzrnk",
+  "license": "MIT",
+  "devDependencies": {
+    "@types/node": "^20.0.0",
+    "esbuild": "^0.20.0",
+    "obsidian": "^1.0.0",
+    "typescript": "^5.0.0"
+  }
+}

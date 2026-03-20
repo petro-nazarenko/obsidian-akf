@@ -1,0 +1,66 @@
+/* AI Knowledge Filler - Obsidian Plugin Styles */
+
+.akf-status-bar-item {
+  padding: 0 8px;
+  font-size: 12px;
+  cursor: pointer;
+  transition: opacity 0.2s;
+}
+
+.akf-status-bar-item:hover {
+  opacity: 0.7;
+}
+
+.akf-modal-buttons {
+  display: flex;
+  gap: 10px;
+  margin-top: 20px;
+}
+
+.akf-validation-error {
+  padding: 10px;
+  margin: 5px 0;
+  background: var(--background-secondary);
+  border-radius: 4px;
+  font-family: monospace;
+  font-size: 13px;
+  border-left: 3px solid var(--color-red);
+}
+
+.akf-validation-results {
+  max-height: 300px;
+  overflow-y: auto;
+}
+
+.akf-status {
+  margin-top: 15px;
+  font-style: italic;
+}
+
+.akf-loading-spinner {
+  display: inline-block;
+  width: 16px;
+  height: 16px;
+  border: 2px solid var(--background-modifier-border);
+  border-top-color: var(--interactive-accent);
+  border-radius: 50%;
+  animation: akf-spin 1s linear infinite;
+}
+
+@keyframes akf-spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+.akf-success {
+  color: var(--color-green);
+}
+
+.akf-error {
+  color: var(--color-red);
+}
+
+.akf-warning {
+  color: var(--color-yellow);
+}
