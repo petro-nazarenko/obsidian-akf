@@ -1,4 +1,4 @@
-import { App, Notice, Plugin, PluginSettingTab, Setting } from "obsidian";
+import { App, Notice, Platform, Plugin, PluginSettingTab, Setting } from "obsidian";
 import { HttpClient } from "./HttpClient";
 import { GenerateModal } from "./GenerateModal";
 import { ValidateModal } from "./ValidateModal";
@@ -143,6 +143,11 @@ export default class ObsidianAKFPlugin extends Plugin {
 
   async initializeServer() {
     if (this.isServerRunning) return;
+
+    if (Platform.isMobile) {
+      new Notice("AKF: running on mobile — start the server manually on your desktop and set the server URL in settings.");
+      return;
+    }
 
     const checks = await this.envChecker.fullCheck();
 

@@ -7,6 +7,5 @@
   "author": "Petro Nzrnk",
   "authorUrl": "https://github.com/petro-nazarenko",
   "fundingUrl": "https://github.com/sponsors/petro-nazarenko",
-  "isDesktopOnly": true,
-  "permissions": ["shell"]
+  "isDesktopOnly": false
 }
