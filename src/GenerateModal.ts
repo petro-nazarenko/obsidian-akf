@@ -1,13 +1,16 @@
 import { App, Modal, Setting, TFile } from "obsidian";
 import ObsidianAKFPlugin from "./main";
-import { MODAL_CLOSE_DELAY_MS } from "./constants";
+import { LLMClient } from "./LLMClient";
+import { validate } from "./Validator";
+import { parseFrontmatter, writeNoteToVault, loadAllowedDomains, sanitizeFilename } from "./utils";
+import { MODAL_CLOSE_DELAY_MS, LLM_MAX_RETRIES } from "./constants";
 
 export class GenerateModal extends Modal {
   plugin: ObsidianAKFPlugin;
-  prompt: string = "";
-  domain: string = "";
-  type: string = "";
-  isGenerating: boolean = false;
+  private prompt = "";
+  private domain = "";
+  private type = "";
+  private attempt = 0;
 
   constructor(app: App, plugin: ObsidianAKFPlugin) {
     super(app);
@@ -16,25 +19,13 @@ export class GenerateModal extends Modal {
   }
 
   onOpen() {
-    const { contentEl } = this;
-    contentEl.empty();
-
-    contentEl.createEl("h2", { text: "🤖 Generate Knowledge File" });
-
-    if (!this.plugin.isServerRunning) {
-      contentEl.createEl("p", {
-        text: "Server is starting...",
-        attr: { style: "color: var(--text-muted);" }
-      });
-      this.plugin.initializeServer();
-    }
-
-    this.renderForm(contentEl);
+    this.renderForm();
   }
 
-  private renderForm(contentEl: HTMLElement) {
+  private renderForm() {
+    const { contentEl } = this;
     contentEl.empty();
-    contentEl.createEl("h2", { text: "🤖 Generate Knowledge File" });
+    contentEl.createEl("h2", { text: "Generate Knowledge File" });
 
     let promptInput: HTMLTextAreaElement;
 
@@ -42,13 +33,14 @@ export class GenerateModal extends Modal {
       .setName("What do you want to create?")
       .setDesc("Describe the knowledge file you need")
       .addTextArea((text) => {
-        text.setPlaceholder("Write a guide on Docker networking, or explain microservices architecture...");
-        text.setValue(this.prompt);
-        text.onChange((value) => {
-          this.prompt = value;
-        });
-        text.inputEl.setAttr("rows", 4);
-        text.inputEl.setAttr("style", "width: 100%;");
+        text
+          .setPlaceholder(
+            "Write a guide on Docker networking, or explain microservices architecture..."
+          )
+          .setValue(this.prompt)
+          .onChange((v) => (this.prompt = v));
+        text.inputEl.rows = 4;
+        text.inputEl.style.width = "100%";
         promptInput = text.inputEl;
       });
 
@@ -56,11 +48,7 @@ export class GenerateModal extends Modal {
       .setName("Domain (optional)")
       .setDesc("e.g., ai-system, api-design, devops, security")
       .addText((text) =>
-        text
-          .setValue(this.domain)
-          .onChange((value) => {
-            this.domain = value;
-          })
+        text.setValue(this.domain).onChange((v) => (this.domain = v))
       );
 
     new Setting(contentEl)
@@ -79,100 +67,141 @@ export class GenerateModal extends Modal {
             audit: "Audit",
           })
           .setValue(this.type)
-          .onChange((value) => {
-            this.type = value;
-          })
+          .onChange((v) => (this.type = v))
       );
 
-    const buttonContainer = contentEl.createDiv({
+    const buttonRow = contentEl.createDiv({
       attr: { style: "display: flex; gap: 10px; margin-top: 20px;" },
     });
 
     const statusEl = contentEl.createDiv({
-      attr: { style: "margin-top: 15px; padding: 10px; background: var(--background-secondary); border-radius: 4px;" },
+      attr: {
+        style:
+          "margin-top: 12px; padding: 10px; background: var(--background-secondary); border-radius: 4px; font-size: 0.9em; min-height: 32px;",
+      },
     });
 
-    const generateBtn = buttonContainer.createEl("button", {
+    const generateBtn = buttonRow.createEl("button", {
       text: "✨ Generate",
       cls: "mod-cta",
     });
+    generateBtn.disabled = true;
 
-    // Disable until user enters a prompt
-    generateBtn.setAttribute("disabled", "true");
+    buttonRow.createEl("button", { text: "Cancel" }).onclick = () => this.close();
 
-    const cancelBtn = buttonContainer.createEl("button", {
-      text: "Cancel",
-    });
-
-    // Enable/disable generate button based on prompt content
+    // Enable button once prompt is non-empty
     setTimeout(() => {
-      if (promptInput) {
-        promptInput.addEventListener("input", () => {
-          if (promptInput.value.trim()) {
-            generateBtn.removeAttribute("disabled");
-          } else {
-            generateBtn.setAttribute("disabled", "true");
-          }
-        });
-      }
+      promptInput?.addEventListener("input", () => {
+        generateBtn.disabled = !promptInput.value.trim();
+      });
     }, 0);
 
-    cancelBtn.onclick = () => {
-      this.close();
-    };
+    generateBtn.onclick = () => this.runGenerate(generateBtn, statusEl);
+  }
 
-    generateBtn.onclick = async () => {
-      if (!this.prompt.trim()) {
-        statusEl.setText("⚠️ Please enter a prompt");
+  private async runGenerate(btn: HTMLButtonElement, statusEl: HTMLElement) {
+    if (!this.prompt.trim()) {
+      statusEl.setText("Please enter a prompt.");
+      return;
+    }
+
+    const allowedDomains = await loadAllowedDomains(this.app);
+
+    let userMessage = this.buildPrompt(this.prompt, this.domain, this.type);
+    let lastErrors: string[] = [];
+
+    btn.disabled = true;
+
+    for (this.attempt = 1; this.attempt <= LLM_MAX_RETRIES; this.attempt++) {
+      statusEl.setText(`⏳ Generating... (attempt ${this.attempt}/${LLM_MAX_RETRIES})`);
+
+      let markdown: string;
+      try {
+        markdown = await LLMClient.generate(userMessage, this.plugin.settings);
+      } catch (err) {
+        statusEl.setText(`❌ ${(err as Error).message}`);
+        btn.disabled = false;
+        btn.setText("🔄 Retry");
         return;
       }
 
-      this.isGenerating = true;
-      generateBtn.setAttribute("disabled", "true");
-      generateBtn.setText("⏳ Generating...");
-      statusEl.setText("🚀 Sending request to AI...");
-
-      try {
-        const result = await this.plugin.httpClient.generate(
-          this.prompt,
-          this.domain || undefined,
-          this.type || undefined
-        );
-
-        if (result.success && result.file_path) {
-          statusEl.setText(`✅ Success! Created: ${result.file_path}`);
-
-          setTimeout(async () => {
-            try {
-              const file = this.plugin.app.vault.getAbstractFileByPath(result.file_path!);
-              if (file instanceof TFile) {
-                await this.plugin.app.workspace.getLeaf().openFile(file);
-              }
-            } catch {
-              console.log("[AKF] Could not open file:", result.file_path);
-            }
-            this.close();
-          }, MODAL_CLOSE_DELAY_MS);
-        } else {
-          const errorMsg = result.errors.length > 0
-            ? result.errors.slice(0, 3).join("\n")
-            : "Generation failed";
-          statusEl.setText(`❌ Error:\n${errorMsg}`);
-          this.isGenerating = false;
-          generateBtn.removeAttribute("disabled");
-          generateBtn.setText("🔄 Retry");
-        }
-      } catch (err) {
-        statusEl.setText(`❌ Error: ${(err as Error).message}`);
-        this.isGenerating = false;
-        generateBtn.removeAttribute("disabled");
-        generateBtn.setText("🔄 Retry");
+      const parsed = parseFrontmatter(markdown);
+      if (!parsed) {
+        lastErrors = ["Response did not contain valid YAML frontmatter."];
+        userMessage = this.buildRetryPrompt(this.prompt, this.domain, this.type, lastErrors);
+        continue;
       }
-    };
+
+      const result = validate(parsed.frontmatter, parsed.body, allowedDomains);
+
+      if (result.is_valid) {
+        const title =
+          typeof parsed.frontmatter.title === "string"
+            ? parsed.frontmatter.title
+            : "untitled";
+        const filename = sanitizeFilename(title) + ".md";
+        try {
+          await writeNoteToVault(this.app, filename, markdown);
+        } catch (err) {
+          statusEl.setText(`❌ Could not write file: ${(err as Error).message}`);
+          btn.disabled = false;
+          btn.setText("🔄 Retry");
+          return;
+        }
+        statusEl.setText(`✅ Created: ${filename}`);
+        setTimeout(async () => {
+          try {
+            const file = this.app.vault.getAbstractFileByPath(filename);
+            if (file instanceof TFile) {
+              await this.app.workspace.getLeaf().openFile(file);
+            }
+          } catch {
+            // best-effort open
+          }
+          this.close();
+        }, MODAL_CLOSE_DELAY_MS);
+        return;
+      }
+
+      // Validation failed — feed errors back to LLM for next attempt
+      lastErrors = result.errors.map((e) => `${e.code}: ${e.message}`);
+      userMessage = this.buildRetryPrompt(this.prompt, this.domain, this.type, lastErrors);
+    }
+
+    // All attempts exhausted
+    const errorList = lastErrors.map((e) => `• ${e}`).join("\n");
+    statusEl.setText(`❌ Validation failed after ${LLM_MAX_RETRIES} attempts:\n${errorList}`);
+    statusEl.style.whiteSpace = "pre-line";
+    btn.disabled = false;
+    btn.setText("🔄 Retry");
+  }
+
+  private buildPrompt(prompt: string, domain: string, type: string): string {
+    const today = new Date().toISOString().slice(0, 10);
+    return [
+      `Generate a knowledge file for: ${prompt}`,
+      domain ? `Domain: ${domain}` : "",
+      type ? `Type: ${type}` : "",
+      `Today's date (use for created and updated): ${today}`,
+    ]
+      .filter(Boolean)
+      .join("\n");
+  }
+
+  private buildRetryPrompt(
+    prompt: string,
+    domain: string,
+    type: string,
+    errors: string[]
+  ): string {
+    return (
+      this.buildPrompt(prompt, domain, type) +
+      "\n\nThe previous attempt had these validation errors — please fix them:\n" +
+      errors.join("\n")
+    );
   }
 
   onClose() {
-    const { contentEl } = this;
-    contentEl.empty();
+    this.contentEl.empty();
   }
 }

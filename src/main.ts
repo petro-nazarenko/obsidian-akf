@@ -1,78 +1,31 @@
-import { App, Notice, Platform, Plugin, PluginSettingTab, Setting } from "obsidian";
-import { HttpClient } from "./HttpClient";
+import { App, Notice, Plugin, PluginSettingTab, Setting } from "obsidian";
 import { GenerateModal } from "./GenerateModal";
 import { ValidateModal } from "./ValidateModal";
-import { AKFStatusBar } from "./StatusBar";
-import { SetupWizardModal } from "./SetupWizard";
-import { EnvironmentChecker } from "./EnvironmentChecker";
-import {
-  DEFAULT_SERVER_PORT,
-  SERVER_STARTUP_POLL_INTERVAL_MS,
-  SERVER_STARTUP_MAX_ATTEMPTS,
-  SERVER_MAX_RESTARTS,
-  SERVER_RESTART_WINDOW_MS,
-  SERVER_RESTART_DELAY_MS,
-} from "./constants";
-import "../styles.css";
 
 export interface AKFSettings {
-  akfPath: string;
-  vaultPath: string;
-  serverPort: number;
   model: string;
   defaultDomain: string;
-  autoStart: boolean;
   anthropicApiKey: string;
   openaiApiKey: string;
   geminiApiKey: string;
   groqApiKey: string;
-  skipSetup: boolean;
-  useOllama: boolean;
-  ollamaModel: string;
 }
 
 const DEFAULT_SETTINGS: AKFSettings = {
-  akfPath: "akf",
-  vaultPath: "",
-  serverPort: DEFAULT_SERVER_PORT,
-  model: "ollama",
+  model: "claude",
   defaultDomain: "",
-  autoStart: true,
   anthropicApiKey: "",
   openaiApiKey: "",
   geminiApiKey: "",
   groqApiKey: "",
-  skipSetup: false,
-  useOllama: true,
-  ollamaModel: "llama3",
 };
 
 export default class ObsidianAKFPlugin extends Plugin {
   settings!: AKFSettings;
-  httpClient!: HttpClient;
-  statusBar!: AKFStatusBar;
-  envChecker!: EnvironmentChecker;
-  isServerRunning = false;
-  private serverProcess: any = null;
-  private setupShown = false;
-  private intentionalStop = false;
-  private restartCount = 0;
-  private firstRestartTime = 0;
 
   async onload() {
     await this.loadSettings();
-    
-    this.envChecker = new EnvironmentChecker(this);
-    this.httpClient = new HttpClient(this);
-    
     this.addSettingTab(new AKFSettingsTab(this.app, this));
-
-    this.statusBar = new AKFStatusBar(this);
-    this.statusBar.register();
-
-    if (this.settings.autoStart) {
-      this.initializeServer();
-    }
 
     this.addCommand({
       id: "akf-generate",
@@ -91,6 +44,8 @@ export default class ObsidianAKFPlugin extends Plugin {
         const file = this.app.workspace.getActiveFile();
         if (file) {
           new ValidateModal(this.app, this, file.path).open();
+        } else {
+          new Notice("No file is currently open.");
         }
       },
     });
@@ -99,216 +54,35 @@ export default class ObsidianAKFPlugin extends Plugin {
       id: "akf-validate-vault",
       name: "Validate entire vault",
       callback: async () => {
+        const { validate } = await import("./Validator");
+        const { parseFrontmatter, loadAllowedDomains } = await import("./utils");
         const notice = new Notice("⏳ Validating vault...", 0);
-        const vaultPath = this.settings.vaultPath || this.getVaultPath();
-        try {
-          const result = await this.httpClient.validate(vaultPath);
-          notice.hide();
-          if (result.is_valid) {
-            new Notice("✅ Vault is valid!");
-          } else {
-            new Notice(`❌ Found ${result.errors.length} error(s) — open a file and use Ctrl+Shift+V for details`);
-          }
-        } catch (err) {
-          notice.hide();
-          new Notice(`❌ Validation failed: ${(err as Error).message}`);
+        const allowedDomains = await loadAllowedDomains(this.app);
+        const files = this.app.vault.getMarkdownFiles();
+        let errorCount = 0;
+        for (const file of files) {
+          const content = await this.app.vault.read(file);
+          const parsed = parseFrontmatter(content);
+          if (!parsed) continue;
+          const result = validate(parsed.frontmatter, parsed.body, allowedDomains);
+          if (!result.is_valid) errorCount += result.errors.length;
+        }
+        notice.hide();
+        if (errorCount === 0) {
+          new Notice("✅ Vault is valid!");
+        } else {
+          new Notice(`❌ Found ${errorCount} error(s) — open a file and use Ctrl+Shift+V for details`);
         }
       },
     });
-
-    this.addCommand({
-      id: "akf-start-server",
-      name: "Start AKF server",
-      callback: () => {
-        this.initializeServer();
-      },
-    });
-
-    this.addCommand({
-      id: "akf-open-settings",
-      name: "Open settings",
-      callback: () => {
-        (this.app as any).commands.executeCommandById("app:open-settings");
-      },
-    });
-
-    this.addCommand({
-      id: "akf-run-setup",
-      name: "Run setup wizard",
-      callback: () => {
-        new SetupWizardModal(this.app, this).open();
-      },
-    });
-  }
-
-  async initializeServer() {
-    if (this.isServerRunning) return;
-
-    if (Platform.isMobile) {
-      new Notice("AKF: running on mobile — start the server manually on your desktop and set the server URL in settings.");
-      return;
-    }
-
-    const checks = await this.envChecker.fullCheck();
-
-    if (!checks.python) {
-      this.statusBar.setStatus("⚠️ No Python");
-      new SetupWizardModal(this.app, this).open();
-      return;
-    }
-
-    if (!checks.akf) {
-      this.statusBar.setStatus("⚙️ Installing...");
-      const installed = await this.envChecker.installAKF();
-      if (!installed) {
-        this.statusBar.setStatus("❌ Install failed");
-        return;
-      }
-    }
-
-    if (checks.akf && !checks.serverRunning) {
-      this.statusBar.setStatus("🚀 Starting...");
-      await this.startServer();
-    }
-
-    if (checks.serverRunning) {
-      this.isServerRunning = true;
-      this.statusBar.setRunning(true);
-      this.statusBar.setStatus("✅ Ready");
-    }
-  }
-
-  private async startServer(): Promise<boolean> {
-    try {
-      const port = this.settings.serverPort;
-      const env = this.getEnvVars();
-
-      const { spawn } = await import("child_process");
-      this.intentionalStop = false;
-
-      this.serverProcess = spawn("akf", ["serve", "--port", String(port)], {
-        stdio: ["pipe", "pipe", "pipe"],
-        shell: true,
-        env: { ...env, ...(await import("process")).env },
-        detached: false,
-      });
-
-      this.serverProcess.stdout?.on("data", (data: Buffer) => {
-        console.log("[AKF]", data.toString().trim());
-      });
-
-      this.serverProcess.stderr?.on("data", (data: Buffer) => {
-        console.error("[AKF Error]", data.toString().trim());
-      });
-
-      this.serverProcess.on("error", (err: Error) => {
-        console.error("[AKF] Server error:", err);
-        this.isServerRunning = false;
-        this.statusBar.setRunning(false);
-      });
-
-      this.serverProcess.on("exit", (code: number) => {
-        console.log("[AKF] Server exited with code:", code);
-        this.isServerRunning = false;
-        this.statusBar.setRunning(false);
-        this.maybeRestartServer();
-      });
-
-      // Poll for readiness instead of a fixed delay
-      for (let i = 0; i < SERVER_STARTUP_MAX_ATTEMPTS; i++) {
-        await new Promise((r) => setTimeout(r, SERVER_STARTUP_POLL_INTERVAL_MS));
-        if (await this.envChecker.isServerRunning()) {
-          this.isServerRunning = true;
-          this.statusBar.setRunning(true);
-          return true;
-        }
-      }
-
-      return false;
-    } catch (err) {
-      console.error("[AKF] Failed to start server:", err);
-      return false;
-    }
-  }
-
-  private maybeRestartServer() {
-    if (this.intentionalStop) return;
-
-    const now = Date.now();
-    if (now - this.firstRestartTime > SERVER_RESTART_WINDOW_MS) {
-      this.restartCount = 0;
-      this.firstRestartTime = now;
-    }
-
-    if (this.restartCount < SERVER_MAX_RESTARTS) {
-      this.restartCount++;
-      console.log(`[AKF] Restarting server (attempt ${this.restartCount}/${SERVER_MAX_RESTARTS})...`);
-      this.statusBar.setStatus("🔄 Restarting...");
-      setTimeout(() => this.startServer(), SERVER_RESTART_DELAY_MS);
-    } else {
-      console.error("[AKF] Server crashed too many times, giving up.");
-      this.statusBar.setStatus("❌ Server crashed");
-    }
-  }
-
-  private getEnvVars(): Record<string, string> {
-    const env: Record<string, string> = {};
-    
-    if (this.settings.anthropicApiKey) {
-      env.ANTHROPIC_API_KEY = this.settings.anthropicApiKey;
-    }
-    if (this.settings.openaiApiKey) {
-      env.OPENAI_API_KEY = this.settings.openaiApiKey;
-    }
-    if (this.settings.geminiApiKey) {
-      env.GOOGLE_API_KEY = this.settings.geminiApiKey;
-    }
-    if (this.settings.groqApiKey) {
-      env.GROQ_API_KEY = this.settings.groqApiKey;
-    }
-    if (this.settings.useOllama) {
-      env.OLLAMA_BASE_URL = "http://localhost:11434";
-    }
-    
-    return env;
-  }
-
-  async stopServer() {
-    this.intentionalStop = true;
-    if (this.serverProcess) {
-      this.serverProcess.kill();
-      this.serverProcess = null;
-    }
-    this.isServerRunning = false;
-    this.statusBar.setRunning(false);
-  }
-
-  private getVaultPath(): string {
-    try {
-      const adapter = this.app.vault.adapter;
-      if ("getBasePath" in adapter) {
-        return (adapter as any).getBasePath();
-      }
-    } catch (e) {
-      console.warn("[AKF] Could not determine vault path, falling back to '.':", e);
-    }
-    return ".";
   }
 
   async loadSettings() {
     this.settings = Object.assign({}, DEFAULT_SETTINGS, await this.loadData());
-    
-    if (!this.settings.vaultPath) {
-      this.settings.vaultPath = this.getVaultPath();
-    }
   }
 
   async saveSettings() {
     await this.saveData(this.settings);
-  }
-
-  onunload() {
-    this.stopServer();
   }
 }
 
@@ -320,125 +94,54 @@ class AKFSettingsTab extends PluginSettingTab {
     this.plugin = plugin;
   }
 
-  async display() {
+  display() {
     const { containerEl } = this;
     containerEl.empty();
 
-    const checks = await this.plugin.envChecker.fullCheck();
+    containerEl.createEl("h2", { text: "AI Knowledge Filler" });
 
-    containerEl.createEl("h2", { text: "🤖 AI Knowledge Filler" });
-
-    containerEl.createEl("div", {
-      attr: {
-        innerHTML: `
-          <p style="color: var(--text-muted); margin-bottom: 20px;">
-            AI-powered knowledge generation with schema validation
-          </p>
-        `
-      }
+    containerEl.createEl("p", {
+      text: "AI-powered knowledge generation with schema validation",
+      attr: { style: "color: var(--text-muted); margin-bottom: 20px;" },
     });
 
-    containerEl.createEl("h3", { text: "📊 Status" });
-
+    // API Key Status
+    containerEl.createEl("h3", { text: "API Key Status" });
+    const { anthropicApiKey, openaiApiKey, geminiApiKey, groqApiKey } = this.plugin.settings;
     const statusEl = containerEl.createDiv({
       attr: {
-        style: "padding: 15px; background: var(--background-secondary); border-radius: 8px; margin-bottom: 20px;"
-      }
+        style:
+          "padding: 12px; background: var(--background-secondary); border-radius: 6px; margin-bottom: 20px;",
+      },
     });
-
-    this.renderStatus(statusEl, checks);
-
-    const refreshBtn = containerEl.createEl("button", {
-      text: "🔄 Refresh Status",
-      cls: "mod-cta"
-    });
-    refreshBtn.onclick = () => this.display();
-
-    containerEl.createEl("h3", { text: "🦙 Ollama (Local AI)" });
-
-    new Setting(containerEl)
-      .setName("Use Ollama")
-      .setDesc("Use local AI (free, no API key needed). Requires Ollama installed.")
-      .addToggle((toggle) =>
-        toggle
-          .setValue(this.plugin.settings.useOllama)
-          .onChange(async (value) => {
-            this.plugin.settings.useOllama = value;
-            if (value) {
-              this.plugin.settings.model = "ollama";
-            }
-            await this.plugin.saveSettings();
-          })
-      );
-
-    new Setting(containerEl)
-      .setName("Ollama model")
-      .setDesc("Model to use with Ollama")
-      .addDropdown((dropdown) =>
-        dropdown
-          .addOptions({
-            llama3: "Llama 3 (recommended)",
-            llama2: "Llama 2",
-            mistral: "Mistral",
-            codellama: "Code Llama",
-          })
-          .setValue(this.plugin.settings.ollamaModel)
-          .onChange(async (value) => {
-            this.plugin.settings.ollamaModel = value;
-            await this.plugin.saveSettings();
-          })
-      );
-
-    if (!checks.ollama) {
-      containerEl.createEl("p", {
-        text: "📥 Install Ollama from ollama.com for free local AI",
-        attr: { style: "color: var(--color-yellow);" }
+    const statusItems = [
+      { label: "Claude (Anthropic)", key: anthropicApiKey },
+      { label: "OpenAI (GPT-4)", key: openaiApiKey },
+      { label: "Google (Gemini)", key: geminiApiKey },
+      { label: "Groq", key: groqApiKey },
+    ];
+    for (const item of statusItems) {
+      const configured = !!item.key;
+      statusEl.createEl("p", {
+        text: `${configured ? "✅" : "⬜"} ${item.label}`,
+        attr: {
+          style: `margin: 4px 0; color: ${configured ? "var(--color-green)" : "var(--text-muted)"};`,
+        },
       });
     }
 
-    containerEl.createEl("h3", { text: "🔑 Cloud API Keys" });
-
-    containerEl.createEl("p", {
-      text: "Use cloud AI (GPT-4, Claude). Only needed if not using Ollama.",
-      attr: { style: "color: var(--text-muted); font-size: 0.9em; margin-bottom: 15px;" }
-    });
-
-    this.createApiKeySetting(
-      "Anthropic (Claude)",
-      "sk-ant-...",
-      "anthropicApiKey"
-    );
-
-    this.createApiKeySetting(
-      "OpenAI (GPT-4)",
-      "sk-...",
-      "openaiApiKey"
-    );
-
-    this.createApiKeySetting(
-      "Google (Gemini)",
-      "AIza...",
-      "geminiApiKey"
-    );
-
-    this.createApiKeySetting(
-      "Groq",
-      "gsk_...",
-      "groqApiKey"
-    );
-
-    containerEl.createEl("h3", { text: "⚙️ General Settings" });
+    // Model selection
+    containerEl.createEl("h3", { text: "Settings" });
 
     new Setting(containerEl)
       .setName("Default model")
-      .setDesc("LLM provider to use")
+      .setDesc("LLM provider to use for generation")
       .addDropdown((dropdown) =>
         dropdown
           .addOptions({
-            ollama: "Ollama (local)",
-            claude: "Claude",
-            gpt4: "GPT-4",
-            gemini: "Gemini",
+            claude: "Claude (Anthropic)",
+            gpt4: "GPT-4 (OpenAI)",
+            gemini: "Gemini (Google)",
             groq: "Groq",
           })
           .setValue(this.plugin.settings.model)
@@ -450,7 +153,7 @@ class AKFSettingsTab extends PluginSettingTab {
 
     new Setting(containerEl)
       .setName("Default domain")
-      .setDesc("Domain for generated files (e.g., ai-system, devops)")
+      .setDesc("Domain for generated files (e.g., ai-system, devops, security)")
       .addText((text) =>
         text
           .setValue(this.plugin.settings.defaultDomain)
@@ -460,98 +163,61 @@ class AKFSettingsTab extends PluginSettingTab {
           })
       );
 
-    new Setting(containerEl)
-      .setName("Auto-start server")
-      .setDesc("Start server when Obsidian opens")
-      .addToggle((toggle) =>
-        toggle
-          .setValue(this.plugin.settings.autoStart)
-          .onChange(async (value) => {
-            this.plugin.settings.autoStart = value;
-            await this.plugin.saveSettings();
-          })
-      );
-
-    new Setting(containerEl)
-      .setName("Server port")
-      .setDesc("Port for the AKF server (default: 8000). Change if port is already in use.")
-      .addText((text) =>
-        text
-          .setValue(String(this.plugin.settings.serverPort))
-          .onChange(async (value) => {
-            const port = parseInt(value, 10);
-            if (!isNaN(port) && port > 0 && port < 65536) {
-              this.plugin.settings.serverPort = port;
-              await this.plugin.saveSettings();
-            }
-          })
-      );
-
-    containerEl.createEl("h3", { text: "🚀 Server" });
-
-    new Setting(containerEl)
-      .setName("Server")
-      .setDesc(this.plugin.isServerRunning ? `🟢 Running on port ${this.plugin.settings.serverPort}` : "🔴 Stopped")
-      .addButton((button) =>
-        button
-          .setButtonText(this.plugin.isServerRunning ? "Stop Server" : "Start Server")
-          .setCta()
-          .onClick(() => {
-            if (this.plugin.isServerRunning) {
-              this.plugin.stopServer();
-            } else {
-              this.plugin.initializeServer();
-            }
-            this.display();
-          })
-      );
-
-    containerEl.createEl("h3", { text: "📖 Quick Help" });
+    // API keys
+    containerEl.createEl("h3", { text: "API Keys" });
 
     containerEl.createEl("p", {
-      text: "• Ctrl+Shift+G — Generate file\n• Ctrl+Shift+V — Validate file",
-      attr: { style: "color: var(--text-muted); font-size: 0.85em; white-space: pre-line;" }
+      text: "At least one API key is required for generation.",
+      attr: { style: "color: var(--text-muted); font-size: 0.9em; margin-bottom: 12px;" },
     });
-  }
 
-  private renderStatus(el: HTMLElement, checks: any) {
-    const items = [
-      { label: "Python", status: checks.python, ok: "✅", fail: "❌" },
-      { label: "AKF", status: checks.akf, ok: "✅", fail: "❌" },
-      { label: "Ollama", status: checks.ollama, ok: "✅", fail: "❌" },
-      { label: "Ollama running", status: checks.ollamaRunning, ok: "✅", fail: "❌" },
-      { label: "Ollama model", status: checks.ollamaModel, ok: "✅", fail: "❌" },
-      { label: "AKF Server", status: checks.serverRunning, ok: "✅", fail: "❌" },
-      { label: "API Key", status: checks.apiKey, ok: "✅", fail: "⚠️ (Ollama fallback)" },
+    this.addApiKeySetting("Anthropic (Claude)", "sk-ant-...", "anthropicApiKey");
+    this.addApiKeySetting("OpenAI (GPT-4)", "sk-...", "openaiApiKey");
+    this.addApiKeySetting("Google (Gemini)", "AIza...", "geminiApiKey");
+    this.addApiKeySetting("Groq", "gsk_...", "groqApiKey");
+
+    // Quick help
+    containerEl.createEl("h3", { text: "Quick Help" });
+    containerEl.createEl("p", {
+      text: "Ctrl+Shift+G — Generate file\nCtrl+Shift+V — Validate current file",
+      attr: { style: "color: var(--text-muted); font-size: 0.85em; white-space: pre-line;" },
+    });
+
+    // Error code reference
+    containerEl.createEl("h3", { text: "Validation Error Codes" });
+    const codes = [
+      "E001 — Invalid enum (type, level, status)",
+      "E002 — Required field missing",
+      "E003 — Date not ISO 8601 format",
+      "E004 — Type mismatch (tags must be array, title must be string)",
+      "E005 — General schema violation",
+      "E006 — Domain not in taxonomy",
+      "E007 — created date is after updated date",
+      "E008 — Invalid relationship type in [[Note|type]] syntax",
     ];
-
-    el.empty();
-    
-    for (const item of items) {
-      const icon = item.status ? item.ok : item.fail;
-      const color = item.status ? "var(--color-green)" : "var(--color-red)";
-      el.createEl("p", {
-        text: `${icon} ${item.label}`,
-        attr: { style: `color: ${color}; margin: 5px 0;` }
+    for (const code of codes) {
+      containerEl.createEl("p", {
+        text: code,
+        attr: { style: "font-size: 0.85em; margin: 3px 0; color: var(--text-muted);" },
       });
     }
   }
 
-  private createApiKeySetting(
+  private addApiKeySetting(
     name: string,
     placeholder: string,
     key: keyof AKFSettings
   ): void {
     new Setting(this.containerEl)
       .setName(name)
-      .setDesc("Optional - only if not using Ollama")
       .addText((text) =>
         text
           .setPlaceholder(placeholder)
-          .setValue((this.plugin.settings as any)[key] as string || "")
+          .setValue((this.plugin.settings[key] as string) || "")
           .onChange(async (value) => {
-            (this.plugin.settings as any)[key] = value;
+            (this.plugin.settings as unknown as Record<string, unknown>)[key] = value;
             await this.plugin.saveSettings();
+            this.display();
           })
           .inputEl.setAttribute("type", "password")
       );
