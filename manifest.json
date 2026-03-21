@@ -1,7 +1,7 @@
 {
   "id": "ai-knowledge-filler",
   "name": "AI Knowledge Filler",
-  "version": "0.2.0",
+  "version": "0.4.0",
   "minAppVersion": "1.0.0",
   "description": "AI-powered structured knowledge generation with schema validation (E001-E008 enforcement). Generate validated Markdown files directly in Obsidian.",
   "author": "Petro Nzrnk",
