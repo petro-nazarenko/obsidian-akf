@@ -11,11 +11,16 @@ export class GenerateModal extends Modal {
   private domain = "";
   private type = "";
   private attempt = 0;
+  private prefilled = "";
 
   constructor(app: App, plugin: ObsidianAKFPlugin) {
     super(app);
     this.plugin = plugin;
     this.domain = plugin.settings.defaultDomain || "";
+  }
+
+  prefillPrompt(prompt: string): void {
+    this.prefilled = prompt;
   }
 
   onOpen() {
@@ -37,8 +42,9 @@ export class GenerateModal extends Modal {
           .setPlaceholder(
             "Write a guide on Docker networking, or explain microservices architecture..."
           )
-          .setValue(this.prompt)
+          .setValue(this.prefilled || this.prompt)
           .onChange((v) => (this.prompt = v));
+        if (this.prefilled) this.prompt = this.prefilled;
         text.inputEl.rows = 4;
         text.inputEl.style.width = "100%";
         promptInput = text.inputEl;

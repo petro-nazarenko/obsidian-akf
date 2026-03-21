@@ -52,6 +52,28 @@ export default class ObsidianAKFPlugin extends Plugin {
       },
     });
 
+    // Intercept clicks on unresolved links
+    this.registerDomEvent(document, 'click', (evt: MouseEvent) => {
+      const target = evt.target as HTMLElement;
+      const link = target.closest('a.internal-link');
+      if (!link) return;
+
+      const href = link.getAttribute('href');
+      if (!href) return;
+
+      // Check if file exists
+      const file = this.app.metadataCache.getFirstLinkpathDest(href, '');
+      if (file) return; // file exists, let Obsidian handle it
+
+      // File does not exist — open GenerateModal with link name as prompt
+      evt.preventDefault();
+      evt.stopPropagation();
+
+      const modal = new GenerateModal(this.app, this);
+      modal.prefillPrompt(href);
+      modal.open();
+    });
+
     this.addCommand({
       id: "akf-validate-vault",
       name: "Validate entire vault",
