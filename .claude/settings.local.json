@@ -1,0 +1,14 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(grep -E \"\\\\.\\(json|js|mjs|css|md\\)$\")",
+      "Bash(npm run:*)",
+      "Bash(HOME=/data/data/com.termux/files/home TMPDIR=/data/data/com.termux/files/usr/tmp npm run build 2>&1)",
+      "Bash(echo $TMPDIR)",
+      "Read(//tmp/**)",
+      "Read(//data/data/com.termux/files/usr/tmp/**)",
+      "Bash(node:*)",
+      "Bash(echo \"EXIT:$?\")"
+    ]
+  }
+}
