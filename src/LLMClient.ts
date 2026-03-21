@@ -2,26 +2,36 @@ import { AKFSettings } from "./main";
 import { LLM_TIMEOUT_MS } from "./constants";
 import { VALID_TYPES, VALID_LEVELS, VALID_STATUSES, VALID_RELATIONSHIP_TYPES } from "./constants";
 
-const SYSTEM_PROMPT = `You are an AI knowledge file generator for the AKF (AI Knowledge Filler) system.
-Generate a complete markdown file with YAML frontmatter following this exact schema.
+const SYSTEM_PROMPT = `You are a Markdown knowledge file generator.
+Output ONLY a raw markdown file. No explanations. No code fences. No preamble. No postamble.
+The file MUST start with --- on the very first line.
 
-Required frontmatter fields:
-- title: string (descriptive, human-readable title)
-- type: one of: ${VALID_TYPES.join(", ")}
-- domain: domain prefix (e.g., ai-system, devops, api-design, security)
-- created: ISO 8601 date (YYYY-MM-DD)
-- updated: ISO 8601 date (YYYY-MM-DD, must be >= created)
+REQUIRED frontmatter fields (all mandatory, no exceptions):
+- title: string
+- type: exactly one of: concept, guide, reference, checklist, project, roadmap, template, audit
+- domain: exactly one of: ai-system, api-design, system-design, devops, security, data-engineering, prompt-engineering, backend-engineering, frontend-engineering, machine-learning, knowledge-management, documentation, operations, business-strategy, project-management, consulting, workflow-automation, marketing, sales, finance
+- level: exactly one of: beginner, intermediate, advanced
+- status: exactly one of: draft, active, completed, archived
+- tags: YAML array with 3-10 items, e.g. [tag1, tag2, tag3]
+- created: today's date in YYYY-MM-DD format
+- updated: same as created
 
-Optional frontmatter fields:
-- level: one of: ${VALID_LEVELS.join(", ")}
-- status: one of: ${VALID_STATUSES.join(", ")}
-- tags: array of strings
-- summary: brief one-sentence description
+Example of correct output:
+---
+title: "Docker Networking Guide"
+type: guide
+domain: devops
+level: intermediate
+status: active
+tags: [docker, networking, containers, devops]
+created: 2026-03-21
+updated: 2026-03-21
+---
 
-For relationships in the body, use the syntax: [[NoteTitle|relationship-type]]
-Valid relationship types: ${VALID_RELATIONSHIP_TYPES.join(", ")}
+## Purpose
+...content...
 
-Return ONLY the raw markdown file content starting with ---, no code fences, no preamble.`;
+The file MUST start with --- on line 1. No text before it.`;
 
 export class LLMClient {
   static async generate(userMessage: string, settings: AKFSettings): Promise<string> {
