@@ -520,9 +520,9 @@ var GenerateModal = class extends import_obsidian2.Modal {
         continue;
       }
       const result = validate(parsed.frontmatter, parsed.body, allowedDomains);
-      if (result.is_valid) {
-        const title = typeof parsed.frontmatter.title === "string" ? parsed.frontmatter.title : "untitled";
-        const filename = sanitizeFilename(title) + ".md";
+      const title = typeof parsed.frontmatter.title === "string" ? parsed.frontmatter.title : "untitled";
+      const filename = sanitizeFilename(title) + ".md";
+      if (!this.plugin.settings.enableValidation || result.is_valid) {
         try {
           await writeNoteToVault(this.app, filename, markdown);
         } catch (err) {
@@ -692,7 +692,8 @@ var DEFAULT_SETTINGS = {
   anthropicApiKey: "",
   openaiApiKey: "",
   geminiApiKey: "",
-  groqApiKey: ""
+  groqApiKey: "",
+  enableValidation: true
 };
 var ObsidianAKFPlugin = class extends import_obsidian4.Plugin {
   async onload() {
@@ -798,6 +799,12 @@ var AKFSettingsTab = class extends import_obsidian4.PluginSettingTab {
         groq: "Groq"
       }).setValue(this.plugin.settings.model).onChange(async (value) => {
         this.plugin.settings.model = value;
+        await this.plugin.saveSettings();
+      })
+    );
+    new import_obsidian4.Setting(containerEl).setName("Enable validation").setDesc("Validate frontmatter before saving. If off, files are always written.").addToggle(
+      (t) => t.setValue(this.plugin.settings.enableValidation).onChange(async (v) => {
+        this.plugin.settings.enableValidation = v;
         await this.plugin.saveSettings();
       })
     );

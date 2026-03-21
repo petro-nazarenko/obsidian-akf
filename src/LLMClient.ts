@@ -1,37 +1,21 @@
 import { AKFSettings } from "./main";
 import { LLM_TIMEOUT_MS } from "./constants";
-import { VALID_TYPES, VALID_LEVELS, VALID_STATUSES, VALID_RELATIONSHIP_TYPES } from "./constants";
 
 const SYSTEM_PROMPT = `You are a Markdown knowledge file generator.
-Output ONLY a raw markdown file. No explanations. No code fences. No preamble. No postamble.
+Output ONLY a raw markdown file. No explanations. No code fences. No preamble.
 The file MUST start with --- on the very first line.
 
-REQUIRED frontmatter fields (all mandatory, no exceptions):
+REQUIRED fields (ALL mandatory):
 - title: string
 - type: exactly one of: concept, guide, reference, checklist, project, roadmap, template, audit
 - domain: exactly one of: ai-system, api-design, system-design, devops, security, data-engineering, prompt-engineering, backend-engineering, frontend-engineering, machine-learning, knowledge-management, documentation, operations, business-strategy, project-management, consulting, workflow-automation, marketing, sales, finance
 - level: exactly one of: beginner, intermediate, advanced
 - status: exactly one of: draft, active, completed, archived
-- tags: YAML array with 3-10 items, e.g. [tag1, tag2, tag3]
-- created: today's date in YYYY-MM-DD format
+- tags: YAML array with 3-10 items like [tag1, tag2, tag3]
+- created: today's date YYYY-MM-DD
 - updated: same as created
 
-Example of correct output:
----
-title: "Docker Networking Guide"
-type: guide
-domain: devops
-level: intermediate
-status: active
-tags: [docker, networking, containers, devops]
-created: 2026-03-21
-updated: 2026-03-21
----
-
-## Purpose
-...content...
-
-The file MUST start with --- on line 1. No text before it.`;
+Output ONLY raw markdown starting with --- on line 1. Nothing before it.`;
 
 export class LLMClient {
   static async generate(userMessage: string, settings: AKFSettings): Promise<string> {
