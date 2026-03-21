@@ -1,4 +1,4 @@
-import { App, Notice, Plugin, PluginSettingTab, Setting } from "obsidian";
+import { App, Notice, Plugin, PluginSettingTab, Setting, TFile } from "obsidian";
 import { GenerateModal } from "./GenerateModal";
 import { ValidateModal } from "./ValidateModal";
 
@@ -52,27 +52,26 @@ export default class ObsidianAKFPlugin extends Plugin {
       },
     });
 
-    // Intercept clicks on unresolved links
-    this.registerDomEvent(document, 'click', (evt: MouseEvent) => {
-      const target = evt.target as HTMLElement;
-      const link = target.closest('a.internal-link');
-      if (!link) return;
+    // Open GenerateModal when Obsidian creates a new empty file (e.g. from clicking an unresolved wikilink)
+    this.registerEvent(
+      this.app.vault.on('create', (file) => {
+        if (!(file instanceof TFile)) return;
+        if (file.extension !== 'md') return;
 
-      const href = link.getAttribute('href');
-      if (!href) return;
+        // Small delay to let Obsidian finish creating the file
+        setTimeout(async () => {
+          const content = await this.app.vault.read(file as TFile);
+          if (content.trim() !== '') return; // not empty, user created it manually
 
-      // Check if file exists
-      const file = this.app.metadataCache.getFirstLinkpathDest(href, '');
-      if (file) return; // file exists, let Obsidian handle it
+          // Get filename without extension as prompt
+          const prompt = file.basename;
 
-      // File does not exist — open GenerateModal with link name as prompt
-      evt.preventDefault();
-      evt.stopPropagation();
-
-      const modal = new GenerateModal(this.app, this);
-      modal.prefillPrompt(href);
-      modal.open();
-    });
+          const modal = new GenerateModal(this.app, this);
+          modal.prefillPrompt(prompt);
+          modal.open();
+        }, 300);
+      })
+    );
 
     this.addCommand({
       id: "akf-validate-vault",
