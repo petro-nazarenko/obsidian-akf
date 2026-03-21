@@ -11,7 +11,8 @@
       "Bash(node esbuild.config.mjs)",
       "Bash(echo \"EXIT_CODE:$?\")",
       "Bash(export TMPDIR=/storage/emulated/0/Download/tmp)",
-      "Bash(mkdir -p $TMPDIR)"
+      "Bash(mkdir -p $TMPDIR)",
+      "Bash(npx tsc:*)"
     ]
   }
 }

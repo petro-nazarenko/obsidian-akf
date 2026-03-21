@@ -5,6 +5,7 @@ import { ValidateModal } from "./ValidateModal";
 export interface AKFSettings {
   model: string;
   defaultDomain: string;
+  language: string;
   anthropicApiKey: string;
   openaiApiKey: string;
   geminiApiKey: string;
@@ -14,6 +15,7 @@ export interface AKFSettings {
 const DEFAULT_SETTINGS: AKFSettings = {
   model: "claude",
   defaultDomain: "",
+  language: "English",
   anthropicApiKey: "",
   openaiApiKey: "",
   geminiApiKey: "",
@@ -150,6 +152,26 @@ class AKFSettingsTab extends PluginSettingTab {
             await this.plugin.saveSettings();
           })
       );
+
+    new Setting(containerEl)
+      .setName("Content language")
+      .setDesc("Language for generated file content. YAML frontmatter stays in English.")
+      .addDropdown(d => d
+        .addOptions({
+          "English": "English",
+          "Russian": "Russian",
+          "Spanish": "Spanish",
+          "French": "French",
+          "German": "German",
+          "Chinese": "Chinese",
+          "Japanese": "Japanese",
+          "Portuguese": "Portuguese",
+        })
+        .setValue(this.plugin.settings.language)
+        .onChange(async v => {
+          this.plugin.settings.language = v;
+          await this.plugin.saveSettings();
+        }));
 
     new Setting(containerEl)
       .setName("Default domain")
