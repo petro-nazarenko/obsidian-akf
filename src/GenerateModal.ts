@@ -12,6 +12,7 @@ export class GenerateModal extends Modal {
   private type = "";
   private attempt = 0;
   private prefilled = "";
+  private targetFile: TFile | null = null;
 
   constructor(app: App, plugin: ObsidianAKFPlugin) {
     super(app);
@@ -21,6 +22,10 @@ export class GenerateModal extends Modal {
 
   prefillPrompt(prompt: string): void {
     this.prefilled = prompt;
+  }
+
+  setTargetFile(file: TFile): void {
+    this.targetFile = file;
   }
 
   onOpen() {
@@ -147,14 +152,19 @@ export class GenerateModal extends Modal {
             : "untitled";
         const filename = sanitizeFilename(title) + ".md";
         try {
-          await writeNoteToVault(this.app, filename, markdown);
+          if (this.targetFile) {
+            await this.app.vault.modify(this.targetFile, markdown);
+            statusEl.setText("✅ Updated: " + this.targetFile.name);
+          } else {
+            await writeNoteToVault(this.app, filename, markdown);
+            statusEl.setText("✅ Created: " + filename);
+          }
         } catch (err) {
           statusEl.setText(`❌ Could not write file: ${(err as Error).message}`);
           btn.disabled = false;
           btn.setText("🔄 Retry");
           return;
         }
-        statusEl.setText(`✅ Created: ${filename}`);
         setTimeout(async () => {
           try {
             const file = this.app.vault.getAbstractFileByPath(filename);

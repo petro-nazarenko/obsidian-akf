@@ -68,6 +68,7 @@ export default class ObsidianAKFPlugin extends Plugin {
 
           const modal = new GenerateModal(this.app, this);
           modal.prefillPrompt(prompt);
+          modal.setTargetFile(file as TFile);
           modal.open();
         }, 300);
       })
