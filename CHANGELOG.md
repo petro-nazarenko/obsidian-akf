@@ -1,6 +1,6 @@
 # Changelog
 
-## [0.2.0] - 2026-03-20
+## [0.4.0] - 2026-03-21
 
 ### Added
 - Configurable server port in settings (default: 8000, change if port is already in use)
