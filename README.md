@@ -1,6 +1,6 @@
 # AI Knowledge Filler for Obsidian
 
-[![Version](https://img.shields.io/badge/version-0.5.0-yellow)](https://github.com/petro-nazarenko/obsidian-akf/releases)
+[![Version](https://img.shields.io/badge/version-0.5.3-yellow)](https://github.com/petro-nazarenko/obsidian-akf/releases)
 [![License](https://img.shields.io/badge/license-MIT-green)](LICENSE)
 
 Generate and validate schema-compliant Markdown knowledge files directly in Obsidian — works on **desktop and mobile**, no Python or server required.
