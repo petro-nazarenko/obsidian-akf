@@ -35,17 +35,52 @@ __export(main_exports, {
 module.exports = __toCommonJS(main_exports);
 var import_obsidian4 = require("obsidian");
 
+// src/constants.ts
+var DEFAULT_SERVER_PORT = 8e3;
+var OLLAMA_PORT = 11434;
+var SERVER_STARTUP_POLL_INTERVAL_MS = 1e3;
+var SERVER_STARTUP_MAX_ATTEMPTS = 8;
+var SERVER_MAX_RESTARTS = 3;
+var SERVER_RESTART_WINDOW_MS = 6e4;
+var SERVER_RESTART_DELAY_MS = 2e3;
+var HEALTH_TIMEOUT_MS = 5e3;
+var OLLAMA_START_DELAY_MS = 2e3;
+var HTTP_GENERATE_TIMEOUT_MS = 6e4;
+var HTTP_DEFAULT_TIMEOUT_MS = 1e4;
+var MODAL_CLOSE_DELAY_MS = 1500;
+var HTTP_MAX_RETRIES = 3;
+var HTTP_RETRY_DELAY_MS = 1e3;
+
 // src/HttpClient.ts
 var HttpClient = class {
   constructor(plugin) {
-    this.baseUrl = "http://localhost:8000";
     this.plugin = plugin;
+  }
+  get baseUrl() {
+    return `http://localhost:${this.plugin.settings.serverPort ?? DEFAULT_SERVER_PORT}`;
   }
   getModel() {
     if (this.plugin.settings.useOllama) {
       return `ollama/${this.plugin.settings.ollamaModel}`;
     }
     return this.plugin.settings.model || "auto";
+  }
+  async withRetry(fn, isRetryable) {
+    let lastResult = await fn();
+    for (let attempt = 1; attempt < HTTP_MAX_RETRIES && isRetryable(lastResult); attempt++) {
+      await new Promise((r) => setTimeout(r, HTTP_RETRY_DELAY_MS * attempt));
+      lastResult = await fn();
+    }
+    return lastResult;
+  }
+  async fetchWithTimeout(url, options, timeoutMs) {
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), timeoutMs);
+    try {
+      return await fetch(url, { ...options, signal: controller.signal });
+    } finally {
+      clearTimeout(timer);
+    }
   }
   async generate(prompt, domain, type) {
     if (!this.plugin.isServerRunning) {
@@ -56,46 +91,60 @@ var HttpClient = class {
         errors: ["Server is not running. Please start the server first."]
       };
     }
-    try {
-      const vaultPath = this.plugin.settings.vaultPath || this.plugin.getVaultPath?.() || ".";
-      const response = await fetch(`${this.baseUrl}/v1/generate`, {
-        method: "POST",
-        headers: {
-          "Content-Type": "application/json"
-        },
-        body: JSON.stringify({
-          prompt,
-          output: vaultPath,
-          model: this.getModel(),
-          domain: domain || this.plugin.settings.defaultDomain || void 0,
-          type: type || void 0
-        })
-      });
-      if (!response.ok) {
-        const error = await response.text();
+    const attempt = async () => {
+      try {
+        const vaultPath = this.plugin.settings.vaultPath || this.plugin.getVaultPath?.() || ".";
+        const response = await this.fetchWithTimeout(
+          `${this.baseUrl}/v1/generate`,
+          {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({
+              prompt,
+              output: vaultPath,
+              model: this.getModel(),
+              domain: domain || this.plugin.settings.defaultDomain || void 0,
+              type: type || void 0
+            })
+          },
+          HTTP_GENERATE_TIMEOUT_MS
+        );
+        if (!response.ok) {
+          const error = await response.text();
+          return {
+            success: false,
+            file_path: null,
+            attempts: 0,
+            errors: [`HTTP ${response.status}: ${error}`],
+            _retryable: response.status >= 500
+          };
+        }
+        const data = await response.json();
+        return {
+          success: data.success ?? true,
+          file_path: data.file_path ?? data.output ?? null,
+          attempts: data.attempts ?? 1,
+          errors: data.errors ?? [],
+          content: data.content,
+          _retryable: false
+        };
+      } catch (err) {
+        const msg = err.name === "AbortError" ? "Request timed out (server took too long to respond)" : err.message;
         return {
           success: false,
           file_path: null,
           attempts: 0,
-          errors: [`HTTP ${response.status}: ${error}`]
+          errors: [msg],
+          _retryable: err.name !== "AbortError"
         };
       }
-      const data = await response.json();
-      return {
-        success: data.success ?? true,
-        file_path: data.file_path ?? data.output ?? null,
-        attempts: data.attempts ?? 1,
-        errors: data.errors ?? [],
-        content: data.content
-      };
-    } catch (err) {
-      return {
-        success: false,
-        file_path: null,
-        attempts: 0,
-        errors: [err.message]
-      };
-    }
+    };
+    const result = await this.withRetry(
+      attempt,
+      (r) => !!r._retryable
+    );
+    const { _retryable: _, ...clean } = result;
+    return clean;
   }
   async validate(path) {
     if (!this.plugin.isServerRunning) {
@@ -104,46 +153,55 @@ var HttpClient = class {
         errors: ["Server is not running"]
       };
     }
-    try {
-      const response = await fetch(`${this.baseUrl}/v1/validate`, {
-        method: "POST",
-        headers: {
-          "Content-Type": "application/json"
-        },
-        body: JSON.stringify({ path })
-      });
-      if (!response.ok) {
-        const error = await response.text();
+    const attempt = async () => {
+      try {
+        const response = await this.fetchWithTimeout(
+          `${this.baseUrl}/v1/validate`,
+          {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ path })
+          },
+          HTTP_GENERATE_TIMEOUT_MS
+        );
+        if (!response.ok) {
+          const error = await response.text();
+          return { is_valid: false, errors: [`HTTP ${response.status}: ${error}`], _retryable: response.status >= 500 };
+        }
+        const data = await response.json();
         return {
-          is_valid: false,
-          errors: [`HTTP ${response.status}: ${error}`]
+          is_valid: data.is_valid ?? data.valid ?? true,
+          errors: data.errors ?? [],
+          warnings: data.warnings,
+          _retryable: false
         };
+      } catch (err) {
+        const msg = err.name === "AbortError" ? "Request timed out (server took too long to respond)" : err.message;
+        return { is_valid: false, errors: [msg], _retryable: err.name !== "AbortError" };
       }
-      const data = await response.json();
-      return {
-        is_valid: data.is_valid ?? data.valid ?? true,
-        errors: data.errors ?? [],
-        warnings: data.warnings
-      };
-    } catch (err) {
-      return {
-        is_valid: false,
-        errors: [err.message]
-      };
-    }
+    };
+    const result = await this.withRetry(attempt, (r) => r._retryable);
+    const { _retryable: _, ...clean } = result;
+    return clean;
   }
   async enrich(path, force = false) {
     if (!this.plugin.isServerRunning) {
       return { enriched: 0, skipped: 0, failed: 1, errors: ["Server not running"] };
     }
     try {
-      const response = await fetch(`${this.baseUrl}/v1/enrich`, {
-        method: "POST",
-        headers: {
-          "Content-Type": "application/json"
+      const response = await this.fetchWithTimeout(
+        `${this.baseUrl}/v1/enrich`,
+        {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ path, force })
         },
-        body: JSON.stringify({ path, force })
-      });
+        HTTP_DEFAULT_TIMEOUT_MS
+      );
+      if (!response.ok) {
+        const error = await response.text();
+        return { enriched: 0, skipped: 0, failed: 1, errors: [`HTTP ${response.status}: ${error}`] };
+      }
       return await response.json();
     } catch (err) {
       return { enriched: 0, skipped: 0, failed: 1, errors: [err.message] };
@@ -155,17 +213,23 @@ var HttpClient = class {
     }
     try {
       const vaultPath = this.plugin.settings.vaultPath || ".";
-      const response = await fetch(`${this.baseUrl}/v1/batch`, {
-        method: "POST",
-        headers: {
-          "Content-Type": "application/json"
+      const response = await this.fetchWithTimeout(
+        `${this.baseUrl}/v1/batch`,
+        {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            plan: prompts.map((p) => ({ prompt: p })),
+            output: vaultPath,
+            model: this.getModel()
+          })
         },
-        body: JSON.stringify({
-          plan: prompts.map((p) => ({ prompt: p })),
-          output: vaultPath,
-          model: this.getModel()
-        })
-      });
+        HTTP_DEFAULT_TIMEOUT_MS
+      );
+      if (!response.ok) {
+        const error = await response.text();
+        return { total: 0, ok: 0, failed: prompts.length, errors: [`HTTP ${response.status}: ${error}`] };
+      }
       return await response.json();
     } catch (err) {
       return { total: 0, ok: 0, failed: prompts.length, errors: [err.message] };
@@ -202,17 +266,14 @@ var GenerateModal = class extends import_obsidian.Modal {
         text: "Server is starting...",
         attr: { style: "color: var(--text-muted);" }
       });
-      setTimeout(() => {
-        this.plugin.initializeServer();
-        this.renderForm(contentEl);
-      }, 100);
-      return;
+      this.plugin.initializeServer();
     }
     this.renderForm(contentEl);
   }
   renderForm(contentEl) {
     contentEl.empty();
     contentEl.createEl("h2", { text: "\u{1F916} Generate Knowledge File" });
+    let promptInput;
     new import_obsidian.Setting(contentEl).setName("What do you want to create?").setDesc("Describe the knowledge file you need").addTextArea((text) => {
       text.setPlaceholder("Write a guide on Docker networking, or explain microservices architecture...");
       text.setValue(this.prompt);
@@ -221,6 +282,7 @@ var GenerateModal = class extends import_obsidian.Modal {
       });
       text.inputEl.setAttr("rows", 4);
       text.inputEl.setAttr("style", "width: 100%;");
+      promptInput = text.inputEl;
     });
     new import_obsidian.Setting(contentEl).setName("Domain (optional)").setDesc("e.g., ai-system, api-design, devops, security").addText(
       (text) => text.setValue(this.domain).onChange((value) => {
@@ -252,9 +314,21 @@ var GenerateModal = class extends import_obsidian.Modal {
       text: "\u2728 Generate",
       cls: "mod-cta"
     });
+    generateBtn.setAttribute("disabled", "true");
     const cancelBtn = buttonContainer.createEl("button", {
       text: "Cancel"
     });
+    setTimeout(() => {
+      if (promptInput) {
+        promptInput.addEventListener("input", () => {
+          if (promptInput.value.trim()) {
+            generateBtn.removeAttribute("disabled");
+          } else {
+            generateBtn.setAttribute("disabled", "true");
+          }
+        });
+      }
+    }, 0);
     cancelBtn.onclick = () => {
       this.close();
     };
@@ -264,7 +338,7 @@ var GenerateModal = class extends import_obsidian.Modal {
         return;
       }
       this.isGenerating = true;
-      generateBtn.setAttr("disabled", true);
+      generateBtn.setAttribute("disabled", "true");
       generateBtn.setText("\u23F3 Generating...");
       statusEl.setText("\u{1F680} Sending request to AI...");
       try {
@@ -277,15 +351,15 @@ var GenerateModal = class extends import_obsidian.Modal {
           statusEl.setText(`\u2705 Success! Created: ${result.file_path}`);
           setTimeout(async () => {
             try {
-              const file = await this.plugin.app.vault.getAbstractFileByPath(result.file_path);
-              if (file && file instanceof this.plugin.app.vault.getFiles().constructor) {
+              const file = this.plugin.app.vault.getAbstractFileByPath(result.file_path);
+              if (file instanceof import_obsidian.TFile) {
                 await this.plugin.app.workspace.getLeaf().openFile(file);
               }
             } catch {
               console.log("[AKF] Could not open file:", result.file_path);
             }
             this.close();
-          }, 1500);
+          }, MODAL_CLOSE_DELAY_MS);
         } else {
           const errorMsg = result.errors.length > 0 ? result.errors.slice(0, 3).join("\n") : "Generation failed";
           statusEl.setText(`\u274C Error:
@@ -332,6 +406,10 @@ var ValidateModal = class extends import_obsidian2.Modal {
       attr: { style: "max-height: 400px; overflow-y: auto;" }
     });
     statusEl.setText("\u23F3 Validating...");
+    const footerEl = contentEl.createDiv({
+      attr: { style: "margin-top: 20px; display: flex; justify-content: flex-end;" }
+    });
+    new import_obsidian2.ButtonComponent(footerEl).setButtonText("Close").onClick(() => this.close());
     this.runValidation(statusEl, resultsEl);
   }
   async runValidation(statusEl, resultsEl) {
@@ -471,6 +549,17 @@ var EnvironmentChecker = class {
       });
     });
   }
+  async fetchWithTimeout(url) {
+    try {
+      const controller = new AbortController();
+      const timer = setTimeout(() => controller.abort(), HEALTH_TIMEOUT_MS);
+      const response = await fetch(url, { signal: controller.signal });
+      clearTimeout(timer);
+      return response.ok;
+    } catch {
+      return false;
+    }
+  }
   async checkPython() {
     const result = await this.runCommand("python --version");
     if (result.success)
@@ -487,11 +576,10 @@ var EnvironmentChecker = class {
     return result.success;
   }
   async isOllamaRunning() {
-    const result = await this.runCommand("curl -s http://localhost:11434/api/tags 2>/dev/null || echo 'not_running'");
-    return result.stdout.includes("models");
+    return this.fetchWithTimeout(`http://localhost:${OLLAMA_PORT}/api/tags`);
   }
   async hasOllamaModel() {
-    const result = await this.runCommand('ollama list 2>/dev/null || echo ""');
+    const result = await this.runCommand("ollama list");
     return result.stdout.includes("llama") || result.stdout.includes("mistral") || result.stdout.includes("codellama");
   }
   async checkApiKey() {
@@ -499,8 +587,8 @@ var EnvironmentChecker = class {
     return !!(settings.anthropicApiKey || settings.openaiApiKey || settings.geminiApiKey || settings.groqApiKey);
   }
   async isServerRunning() {
-    const result = await this.runCommand("curl -s http://localhost:8000/health 2>/dev/null || echo 'not_running'");
-    return result.stdout.includes("ok") || result.stdout.includes("true");
+    const port = this.plugin.settings?.serverPort ?? DEFAULT_SERVER_PORT;
+    return this.fetchWithTimeout(`http://localhost:${port}/health`);
   }
   async fullCheck() {
     const [python, akf, ollama, ollamaRunning, ollamaModel, apiKey, serverRunning] = await Promise.all([
@@ -555,12 +643,13 @@ var EnvironmentChecker = class {
   }
   startOllama() {
     return new Promise((resolve) => {
-      (0, import_child_process.exec)("start /B ollama serve", (error) => {
+      const cmd = process.platform === "win32" ? "start /B ollama serve" : "ollama serve &";
+      (0, import_child_process.exec)(cmd, (error) => {
         if (error) {
           console.error("[AKF] Ollama start failed:", error);
           resolve(false);
         } else {
-          setTimeout(() => resolve(true), 2e3);
+          setTimeout(() => resolve(true), OLLAMA_START_DELAY_MS);
         }
       });
     });
@@ -844,6 +933,7 @@ var SetupWizardModal = class extends import_obsidian3.Modal {
 var DEFAULT_SETTINGS = {
   akfPath: "akf",
   vaultPath: "",
+  serverPort: DEFAULT_SERVER_PORT,
   model: "ollama",
   defaultDomain: "",
   autoStart: true,
@@ -861,6 +951,9 @@ var ObsidianAKFPlugin = class extends import_obsidian4.Plugin {
     this.isServerRunning = false;
     this.serverProcess = null;
     this.setupShown = false;
+    this.intentionalStop = false;
+    this.restartCount = 0;
+    this.firstRestartTime = 0;
   }
   async onload() {
     await this.loadSettings();
@@ -895,8 +988,20 @@ var ObsidianAKFPlugin = class extends import_obsidian4.Plugin {
       id: "akf-validate-vault",
       name: "Validate entire vault",
       callback: async () => {
+        const notice = new import_obsidian4.Notice("\u23F3 Validating vault...", 0);
         const vaultPath = this.settings.vaultPath || this.getVaultPath();
-        await this.httpClient.validate(vaultPath);
+        try {
+          const result = await this.httpClient.validate(vaultPath);
+          notice.hide();
+          if (result.is_valid) {
+            new import_obsidian4.Notice("\u2705 Vault is valid!");
+          } else {
+            new import_obsidian4.Notice(`\u274C Found ${result.errors.length} error(s) \u2014 open a file and use Ctrl+Shift+V for details`);
+          }
+        } catch (err) {
+          notice.hide();
+          new import_obsidian4.Notice(`\u274C Validation failed: ${err.message}`);
+        }
       }
     });
     this.addCommand({
@@ -924,6 +1029,10 @@ var ObsidianAKFPlugin = class extends import_obsidian4.Plugin {
   async initializeServer() {
     if (this.isServerRunning)
       return;
+    if (import_obsidian4.Platform.isMobile) {
+      new import_obsidian4.Notice("AKF: running on mobile \u2014 start the server manually on your desktop and set the server URL in settings.");
+      return;
+    }
     const checks = await this.envChecker.fullCheck();
     if (!checks.python) {
       this.statusBar.setStatus("\u26A0\uFE0F No Python");
@@ -950,18 +1059,17 @@ var ObsidianAKFPlugin = class extends import_obsidian4.Plugin {
   }
   async startServer() {
     try {
-      const port = 8e3;
+      const port = this.settings.serverPort;
       const env = this.getEnvVars();
       const { spawn } = await import("child_process");
+      this.intentionalStop = false;
       this.serverProcess = spawn("akf", ["serve", "--port", String(port)], {
         stdio: ["pipe", "pipe", "pipe"],
         shell: true,
         env: { ...env, ...(await import("process")).env },
         detached: false
       });
-      let output = "";
       this.serverProcess.stdout?.on("data", (data) => {
-        output += data.toString();
         console.log("[AKF]", data.toString().trim());
       });
       this.serverProcess.stderr?.on("data", (data) => {
@@ -976,18 +1084,38 @@ var ObsidianAKFPlugin = class extends import_obsidian4.Plugin {
         console.log("[AKF] Server exited with code:", code);
         this.isServerRunning = false;
         this.statusBar.setRunning(false);
+        this.maybeRestartServer();
       });
-      await new Promise((resolve) => setTimeout(resolve, 3e3));
-      const serverRunning = await this.envChecker.isServerRunning();
-      if (serverRunning) {
-        this.isServerRunning = true;
-        this.statusBar.setRunning(true);
-        return true;
+      for (let i = 0; i < SERVER_STARTUP_MAX_ATTEMPTS; i++) {
+        await new Promise((r) => setTimeout(r, SERVER_STARTUP_POLL_INTERVAL_MS));
+        if (await this.envChecker.isServerRunning()) {
+          this.isServerRunning = true;
+          this.statusBar.setRunning(true);
+          return true;
+        }
       }
       return false;
     } catch (err) {
       console.error("[AKF] Failed to start server:", err);
       return false;
+    }
+  }
+  maybeRestartServer() {
+    if (this.intentionalStop)
+      return;
+    const now = Date.now();
+    if (now - this.firstRestartTime > SERVER_RESTART_WINDOW_MS) {
+      this.restartCount = 0;
+      this.firstRestartTime = now;
+    }
+    if (this.restartCount < SERVER_MAX_RESTARTS) {
+      this.restartCount++;
+      console.log(`[AKF] Restarting server (attempt ${this.restartCount}/${SERVER_MAX_RESTARTS})...`);
+      this.statusBar.setStatus("\u{1F504} Restarting...");
+      setTimeout(() => this.startServer(), SERVER_RESTART_DELAY_MS);
+    } else {
+      console.error("[AKF] Server crashed too many times, giving up.");
+      this.statusBar.setStatus("\u274C Server crashed");
     }
   }
   getEnvVars() {
@@ -1010,6 +1138,7 @@ var ObsidianAKFPlugin = class extends import_obsidian4.Plugin {
     return env;
   }
   async stopServer() {
+    this.intentionalStop = true;
     if (this.serverProcess) {
       this.serverProcess.kill();
       this.serverProcess = null;
@@ -1023,7 +1152,8 @@ var ObsidianAKFPlugin = class extends import_obsidian4.Plugin {
       if ("getBasePath" in adapter) {
         return adapter.getBasePath();
       }
-    } catch {
+    } catch (e) {
+      console.warn("[AKF] Could not determine vault path, falling back to '.':", e);
     }
     return ".";
   }
@@ -1148,8 +1278,17 @@ var AKFSettingsTab = class extends import_obsidian4.PluginSettingTab {
         await this.plugin.saveSettings();
       })
     );
+    new import_obsidian4.Setting(containerEl).setName("Server port").setDesc("Port for the AKF server (default: 8000). Change if port is already in use.").addText(
+      (text) => text.setValue(String(this.plugin.settings.serverPort)).onChange(async (value) => {
+        const port = parseInt(value, 10);
+        if (!isNaN(port) && port > 0 && port < 65536) {
+          this.plugin.settings.serverPort = port;
+          await this.plugin.saveSettings();
+        }
+      })
+    );
     containerEl.createEl("h3", { text: "\u{1F680} Server" });
-    new import_obsidian4.Setting(containerEl).setName("Server").setDesc(this.plugin.isServerRunning ? "\u{1F7E2} Running on port 8000" : "\u{1F534} Stopped").addButton(
+    new import_obsidian4.Setting(containerEl).setName("Server").setDesc(this.plugin.isServerRunning ? `\u{1F7E2} Running on port ${this.plugin.settings.serverPort}` : "\u{1F534} Stopped").addButton(
       (button) => button.setButtonText(this.plugin.isServerRunning ? "Stop Server" : "Start Server").setCta().onClick(() => {
         if (this.plugin.isServerRunning) {
           this.plugin.stopServer();
