@@ -3,7 +3,7 @@ import ObsidianAKFPlugin from "./main";
 import { LLMClient } from "./LLMClient";
 import { validate } from "./Validator";
 import { parseFrontmatter, writeNoteToVault, loadAllowedDomains, sanitizeFilename } from "./utils";
-import { MODAL_CLOSE_DELAY_MS, LLM_MAX_RETRIES } from "./constants";
+import { MODAL_CLOSE_DELAY_MS, LLM_MAX_RETRIES, VALID_DOMAINS } from "./constants";
 
 export class GenerateModal extends Modal {
   plugin: ObsidianAKFPlugin;
@@ -57,10 +57,13 @@ export class GenerateModal extends Modal {
 
     new Setting(contentEl)
       .setName("Domain (optional)")
-      .setDesc("e.g., ai-system, api-design, devops, security")
-      .addText((text) =>
-        text.setValue(this.domain).onChange((v) => (this.domain = v))
-      );
+      .setDesc("Knowledge domain for the file")
+      .addDropdown(d => {
+        d.addOption("", "Auto-detect");
+        VALID_DOMAINS.forEach(domain => d.addOption(domain, domain));
+        d.setValue(this.domain);
+        d.onChange(v => { this.domain = v; });
+      });
 
     new Setting(contentEl)
       .setName("Type (optional)")

@@ -26,6 +26,14 @@ export const VALID_RELATIONSHIP_TYPES = [
 
 export const REQUIRED_FIELDS = ["title", "type", "domain", "created", "updated"] as const;
 
+export const VALID_DOMAINS = [
+  "ai-system", "api-design", "system-design", "devops", "security",
+  "data-engineering", "prompt-engineering", "backend-engineering",
+  "frontend-engineering", "machine-learning", "knowledge-management",
+  "documentation", "operations", "business-strategy", "project-management",
+  "consulting", "workflow-automation", "marketing", "sales", "finance"
+];
+
 export const DEFAULT_DOMAINS = [
   "ai-system",
   "api-design",
