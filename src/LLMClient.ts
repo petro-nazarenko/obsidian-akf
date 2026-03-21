@@ -25,34 +25,37 @@ Return ONLY the raw markdown file content starting with ---, no code fences, no 
 
 export class LLMClient {
   static async generate(userMessage: string, settings: AKFSettings): Promise<string> {
+    const systemPrompt = SYSTEM_PROMPT + `
+
+Generate all body content in: ${settings.language || "English"}. YAML frontmatter fields must remain in English.`;
     const { model, anthropicApiKey, openaiApiKey, geminiApiKey, groqApiKey } = settings;
 
     // Provider selection: use settings.model if its key is set, else first available
     if ((model === "claude" || model === "anthropic") && anthropicApiKey) {
-      return LLMClient.callAnthropic(userMessage, anthropicApiKey);
+      return LLMClient.callAnthropic(userMessage, anthropicApiKey, systemPrompt);
     }
     if ((model === "gpt4" || model === "openai") && openaiApiKey) {
-      return LLMClient.callOpenAI(userMessage, openaiApiKey);
+      return LLMClient.callOpenAI(userMessage, openaiApiKey, systemPrompt);
     }
     if ((model === "gemini") && geminiApiKey) {
-      return LLMClient.callGemini(userMessage, geminiApiKey);
+      return LLMClient.callGemini(userMessage, geminiApiKey, systemPrompt);
     }
     if ((model === "groq") && groqApiKey) {
-      return LLMClient.callGroq(userMessage, groqApiKey);
+      return LLMClient.callGroq(userMessage, groqApiKey, systemPrompt);
     }
 
     // Auto-detect: use first available key
-    if (anthropicApiKey) return LLMClient.callAnthropic(userMessage, anthropicApiKey);
-    if (openaiApiKey) return LLMClient.callOpenAI(userMessage, openaiApiKey);
-    if (geminiApiKey) return LLMClient.callGemini(userMessage, geminiApiKey);
-    if (groqApiKey) return LLMClient.callGroq(userMessage, groqApiKey);
+    if (anthropicApiKey) return LLMClient.callAnthropic(userMessage, anthropicApiKey, systemPrompt);
+    if (openaiApiKey) return LLMClient.callOpenAI(userMessage, openaiApiKey, systemPrompt);
+    if (geminiApiKey) return LLMClient.callGemini(userMessage, geminiApiKey, systemPrompt);
+    if (groqApiKey) return LLMClient.callGroq(userMessage, groqApiKey, systemPrompt);
 
     throw new Error(
       "No API key configured. Add an API key in Settings → AI Knowledge Filler."
     );
   }
 
-  private static async callAnthropic(prompt: string, apiKey: string): Promise<string> {
+  private static async callAnthropic(prompt: string, apiKey: string, systemPrompt: string): Promise<string> {
     const controller = new AbortController();
     const timer = setTimeout(() => controller.abort(), LLM_TIMEOUT_MS);
     try {
@@ -66,7 +69,7 @@ export class LLMClient {
         body: JSON.stringify({
           model: "claude-3-5-sonnet-20241022",
           max_tokens: 4096,
-          system: SYSTEM_PROMPT,
+          system: systemPrompt,
           messages: [{ role: "user", content: prompt }],
         }),
         signal: controller.signal,
@@ -82,7 +85,7 @@ export class LLMClient {
     }
   }
 
-  private static async callOpenAI(prompt: string, apiKey: string): Promise<string> {
+  private static async callOpenAI(prompt: string, apiKey: string, systemPrompt: string): Promise<string> {
     const controller = new AbortController();
     const timer = setTimeout(() => controller.abort(), LLM_TIMEOUT_MS);
     try {
@@ -96,7 +99,7 @@ export class LLMClient {
           model: "gpt-4o",
           max_tokens: 4096,
           messages: [
-            { role: "system", content: SYSTEM_PROMPT },
+            { role: "system", content: systemPrompt },
             { role: "user", content: prompt },
           ],
         }),
@@ -113,17 +116,17 @@ export class LLMClient {
     }
   }
 
-  private static async callGemini(prompt: string, apiKey: string): Promise<string> {
+  private static async callGemini(prompt: string, apiKey: string, systemPrompt: string): Promise<string> {
     const controller = new AbortController();
     const timer = setTimeout(() => controller.abort(), LLM_TIMEOUT_MS);
     try {
-      const url = `https://generativelanguage.googleapis.com/v1beta/models/gemini-pro:generateContent?key=${apiKey}`;
+      const url = `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent?key=${apiKey}`;
       const response = await fetch(url, {
         method: "POST",
         headers: { "content-type": "application/json" },
         body: JSON.stringify({
           contents: [
-            { parts: [{ text: SYSTEM_PROMPT + "\n\n" + prompt }] },
+            { parts: [{ text: systemPrompt + "\n\n" + prompt }] },
           ],
         }),
         signal: controller.signal,
@@ -141,7 +144,7 @@ export class LLMClient {
     }
   }
 
-  private static async callGroq(prompt: string, apiKey: string): Promise<string> {
+  private static async callGroq(prompt: string, apiKey: string, systemPrompt: string): Promise<string> {
     const controller = new AbortController();
     const timer = setTimeout(() => controller.abort(), LLM_TIMEOUT_MS);
     try {
@@ -155,7 +158,7 @@ export class LLMClient {
           model: "llama-3.3-70b-versatile",
           max_tokens: 4096,
           messages: [
-            { role: "system", content: SYSTEM_PROMPT },
+            { role: "system", content: systemPrompt },
             { role: "user", content: prompt },
           ],
         }),

@@ -134,12 +134,13 @@ export class GenerateModal extends Modal {
 
       const result = validate(parsed.frontmatter, parsed.body, allowedDomains);
 
-      if (result.is_valid) {
-        const title =
-          typeof parsed.frontmatter.title === "string"
-            ? parsed.frontmatter.title
-            : "untitled";
-        const filename = sanitizeFilename(title) + ".md";
+      const title =
+        typeof parsed.frontmatter.title === "string"
+          ? parsed.frontmatter.title
+          : "untitled";
+      const filename = sanitizeFilename(title) + ".md";
+
+      if (!this.plugin.settings.enableValidation || result.is_valid) {
         try {
           await writeNoteToVault(this.app, filename, markdown);
         } catch (err) {
@@ -163,7 +164,7 @@ export class GenerateModal extends Modal {
         return;
       }
 
-      // Validation failed — feed errors back to LLM for next attempt
+      // Validation on and failed — feed errors back to LLM for next attempt
       lastErrors = result.errors.map((e) => `${e.code}: ${e.message}`);
       userMessage = this.buildRetryPrompt(this.prompt, this.domain, this.type, lastErrors);
     }

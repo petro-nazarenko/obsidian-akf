@@ -285,32 +285,35 @@ Valid relationship types: ${VALID_RELATIONSHIP_TYPES.join(", ")}
 Return ONLY the raw markdown file content starting with ---, no code fences, no preamble.`;
 var LLMClient = class _LLMClient {
   static async generate(userMessage, settings) {
+    const systemPrompt = SYSTEM_PROMPT + `
+
+Generate all body content in: ${settings.language || "English"}. YAML frontmatter fields must remain in English.`;
     const { model, anthropicApiKey, openaiApiKey, geminiApiKey, groqApiKey } = settings;
     if ((model === "claude" || model === "anthropic") && anthropicApiKey) {
-      return _LLMClient.callAnthropic(userMessage, anthropicApiKey);
+      return _LLMClient.callAnthropic(userMessage, anthropicApiKey, systemPrompt);
     }
     if ((model === "gpt4" || model === "openai") && openaiApiKey) {
-      return _LLMClient.callOpenAI(userMessage, openaiApiKey);
+      return _LLMClient.callOpenAI(userMessage, openaiApiKey, systemPrompt);
     }
     if (model === "gemini" && geminiApiKey) {
-      return _LLMClient.callGemini(userMessage, geminiApiKey);
+      return _LLMClient.callGemini(userMessage, geminiApiKey, systemPrompt);
     }
     if (model === "groq" && groqApiKey) {
-      return _LLMClient.callGroq(userMessage, groqApiKey);
+      return _LLMClient.callGroq(userMessage, groqApiKey, systemPrompt);
     }
     if (anthropicApiKey)
-      return _LLMClient.callAnthropic(userMessage, anthropicApiKey);
+      return _LLMClient.callAnthropic(userMessage, anthropicApiKey, systemPrompt);
     if (openaiApiKey)
-      return _LLMClient.callOpenAI(userMessage, openaiApiKey);
+      return _LLMClient.callOpenAI(userMessage, openaiApiKey, systemPrompt);
     if (geminiApiKey)
-      return _LLMClient.callGemini(userMessage, geminiApiKey);
+      return _LLMClient.callGemini(userMessage, geminiApiKey, systemPrompt);
     if (groqApiKey)
-      return _LLMClient.callGroq(userMessage, groqApiKey);
+      return _LLMClient.callGroq(userMessage, groqApiKey, systemPrompt);
     throw new Error(
       "No API key configured. Add an API key in Settings \u2192 AI Knowledge Filler."
     );
   }
-  static async callAnthropic(prompt, apiKey) {
+  static async callAnthropic(prompt, apiKey, systemPrompt) {
     const controller = new AbortController();
     const timer = setTimeout(() => controller.abort(), LLM_TIMEOUT_MS);
     try {
@@ -324,7 +327,7 @@ var LLMClient = class _LLMClient {
         body: JSON.stringify({
           model: "claude-3-5-sonnet-20241022",
           max_tokens: 4096,
-          system: SYSTEM_PROMPT,
+          system: systemPrompt,
           messages: [{ role: "user", content: prompt }]
         }),
         signal: controller.signal
@@ -339,7 +342,7 @@ var LLMClient = class _LLMClient {
       clearTimeout(timer);
     }
   }
-  static async callOpenAI(prompt, apiKey) {
+  static async callOpenAI(prompt, apiKey, systemPrompt) {
     const controller = new AbortController();
     const timer = setTimeout(() => controller.abort(), LLM_TIMEOUT_MS);
     try {
@@ -353,7 +356,7 @@ var LLMClient = class _LLMClient {
           model: "gpt-4o",
           max_tokens: 4096,
           messages: [
-            { role: "system", content: SYSTEM_PROMPT },
+            { role: "system", content: systemPrompt },
             { role: "user", content: prompt }
           ]
         }),
@@ -369,17 +372,17 @@ var LLMClient = class _LLMClient {
       clearTimeout(timer);
     }
   }
-  static async callGemini(prompt, apiKey) {
+  static async callGemini(prompt, apiKey, systemPrompt) {
     const controller = new AbortController();
     const timer = setTimeout(() => controller.abort(), LLM_TIMEOUT_MS);
     try {
-      const url = `https://generativelanguage.googleapis.com/v1beta/models/gemini-pro:generateContent?key=${apiKey}`;
+      const url = `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent?key=${apiKey}`;
       const response = await fetch(url, {
         method: "POST",
         headers: { "content-type": "application/json" },
         body: JSON.stringify({
           contents: [
-            { parts: [{ text: SYSTEM_PROMPT + "\n\n" + prompt }] }
+            { parts: [{ text: systemPrompt + "\n\n" + prompt }] }
           ]
         }),
         signal: controller.signal
@@ -394,7 +397,7 @@ var LLMClient = class _LLMClient {
       clearTimeout(timer);
     }
   }
-  static async callGroq(prompt, apiKey) {
+  static async callGroq(prompt, apiKey, systemPrompt) {
     const controller = new AbortController();
     const timer = setTimeout(() => controller.abort(), LLM_TIMEOUT_MS);
     try {
@@ -408,7 +411,7 @@ var LLMClient = class _LLMClient {
           model: "llama-3.3-70b-versatile",
           max_tokens: 4096,
           messages: [
-            { role: "system", content: SYSTEM_PROMPT },
+            { role: "system", content: systemPrompt },
             { role: "user", content: prompt }
           ]
         }),
@@ -520,9 +523,9 @@ var GenerateModal = class extends import_obsidian2.Modal {
         continue;
       }
       const result = validate(parsed.frontmatter, parsed.body, allowedDomains);
-      if (result.is_valid) {
-        const title = typeof parsed.frontmatter.title === "string" ? parsed.frontmatter.title : "untitled";
-        const filename = sanitizeFilename(title) + ".md";
+      const title = typeof parsed.frontmatter.title === "string" ? parsed.frontmatter.title : "untitled";
+      const filename = sanitizeFilename(title) + ".md";
+      if (!this.plugin.settings.enableValidation || result.is_valid) {
         try {
           await writeNoteToVault(this.app, filename, markdown);
         } catch (err) {
@@ -692,7 +695,9 @@ var DEFAULT_SETTINGS = {
   anthropicApiKey: "",
   openaiApiKey: "",
   geminiApiKey: "",
-  groqApiKey: ""
+  groqApiKey: "",
+  enableValidation: true,
+  language: "English"
 };
 var ObsidianAKFPlugin = class extends import_obsidian4.Plugin {
   async onload() {
@@ -801,6 +806,25 @@ var AKFSettingsTab = class extends import_obsidian4.PluginSettingTab {
         await this.plugin.saveSettings();
       })
     );
+    new import_obsidian4.Setting(containerEl).setName("Enable validation").setDesc("Validate frontmatter before saving. If off, files are always written.").addToggle(
+      (t) => t.setValue(this.plugin.settings.enableValidation).onChange(async (v) => {
+        this.plugin.settings.enableValidation = v;
+        await this.plugin.saveSettings();
+      })
+    );
+    new import_obsidian4.Setting(containerEl).setName("Content language").setDesc("Language for generated file content. YAML frontmatter stays in English.").addDropdown((d) => d.addOptions({
+      "English": "English",
+      "Russian": "Russian",
+      "Spanish": "Spanish",
+      "French": "French",
+      "German": "German",
+      "Chinese": "Chinese",
+      "Japanese": "Japanese",
+      "Portuguese": "Portuguese"
+    }).setValue(this.plugin.settings.language).onChange(async (v) => {
+      this.plugin.settings.language = v;
+      await this.plugin.saveSettings();
+    }));
     new import_obsidian4.Setting(containerEl).setName("Default domain").setDesc("Domain for generated files (e.g., ai-system, devops, security)").addText(
       (text) => text.setValue(this.plugin.settings.defaultDomain).onChange(async (value) => {
         this.plugin.settings.defaultDomain = value;

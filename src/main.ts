@@ -9,6 +9,8 @@ export interface AKFSettings {
   openaiApiKey: string;
   geminiApiKey: string;
   groqApiKey: string;
+  enableValidation: boolean;
+  language: string;
 }
 
 const DEFAULT_SETTINGS: AKFSettings = {
@@ -18,6 +20,8 @@ const DEFAULT_SETTINGS: AKFSettings = {
   openaiApiKey: "",
   geminiApiKey: "",
   groqApiKey: "",
+  enableValidation: true,
+  language: "English",
 };
 
 export default class ObsidianAKFPlugin extends Plugin {
@@ -150,6 +154,39 @@ class AKFSettingsTab extends PluginSettingTab {
             await this.plugin.saveSettings();
           })
       );
+
+    new Setting(containerEl)
+      .setName("Enable validation")
+      .setDesc("Validate frontmatter before saving. If off, files are always written.")
+      .addToggle((t) =>
+        t
+          .setValue(this.plugin.settings.enableValidation)
+          .onChange(async (v) => {
+            this.plugin.settings.enableValidation = v;
+            await this.plugin.saveSettings();
+          })
+      );
+
+
+    new Setting(containerEl)
+      .setName("Content language")
+      .setDesc("Language for generated file content. YAML frontmatter stays in English.")
+      .addDropdown(d => d
+        .addOptions({
+          "English": "English",
+          "Russian": "Russian",
+          "Spanish": "Spanish",
+          "French": "French",
+          "German": "German",
+          "Chinese": "Chinese",
+          "Japanese": "Japanese",
+          "Portuguese": "Portuguese",
+        })
+        .setValue(this.plugin.settings.language)
+        .onChange(async (v) => {
+          this.plugin.settings.language = v;
+          await this.plugin.saveSettings();
+        }));
 
     new Setting(containerEl)
       .setName("Default domain")
