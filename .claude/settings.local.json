@@ -6,7 +6,12 @@
       "Bash(HOME=/data/data/com.termux/files/home TMPDIR=/data/data/com.termux/files/usr/tmp npm run build 2>&1)",
       "Bash(echo $TMPDIR)",
       "Read(//tmp/**)",
-      "Read(//data/data/com.termux/files/usr/tmp/**)"
+      "Read(//data/data/com.termux/files/usr/tmp/**)",
+      "Bash(node node_modules/typescript/bin/tsc --noEmit)",
+      "Bash(node esbuild.config.mjs)",
+      "Bash(echo \"EXIT_CODE:$?\")",
+      "Bash(export TMPDIR=/storage/emulated/0/Download/tmp)",
+      "Bash(mkdir -p $TMPDIR)"
     ]
   }
 }

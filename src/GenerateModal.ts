@@ -194,11 +194,24 @@ export class GenerateModal extends Modal {
     type: string,
     errors: string[]
   ): string {
-    return (
-      this.buildPrompt(prompt, domain, type) +
-      "\n\nThe previous attempt had these validation errors — please fix them:\n" +
-      errors.join("\n")
-    );
+    const today = new Date().toISOString().slice(0, 10);
+    return [
+      `Generate a knowledge file for: ${prompt}`,
+      domain ? `Domain: ${domain}` : "",
+      type ? `Type: ${type}` : "",
+      `Today's date (use for created and updated): ${today}`,
+      ``,
+      `PREVIOUS ATTEMPT FAILED. Fix these exact errors:`,
+      ...errors.map(e => `- ${e}`),
+      ``,
+      `REMINDER of valid enum values:`,
+      `- status: MUST be exactly one of: draft, active, completed, archived`,
+      `- type: MUST be exactly one of: concept, guide, reference, checklist, project, roadmap, template, audit`,
+      `- level: MUST be exactly one of: beginner, intermediate, advanced`,
+      `- tags: MUST be a YAML array like [tag1, tag2, tag3] with 3-10 items`,
+      ``,
+      `Output ONLY the raw markdown file starting with --- on line 1.`,
+    ].filter(s => s !== undefined).join("\n");
   }
 
   onClose() {
